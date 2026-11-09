@@ -2,6 +2,7 @@ name: Build APK (satu file)
 
 # CARA PAKAI
 # 1. Di repo GitHub kamu: Add file > Create new file, beri nama  .github/workflows/build.yml
+#    (kalau file itu sudah ada: buka, ketuk ikon pensil, pilih semua isinya, lalu tempel file ini)
 # 2. Tempel SELURUH isi file ini, lalu Commit changes.
 # 3. Buka tab Actions, tunggu build selesai, unduh APK di bagian Artifacts.
 #
@@ -1917,12 +1918,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
       - name: Pasang SDK, NDK, CMake
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then SDKM="$(command -v sdkmanager)"; fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "pakai sdkmanager: $SDKM"
+          yes | "$SDKM" --sdk_root="$SDK" --licenses > /dev/null || true
+          "$SDKM" --sdk_root="$SDK" --install "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
 
       - name: Unduh core mGBA (libretro, arm64)
         run: |
@@ -1940,7 +1944,19 @@ jobs:
           gradle-version: "8.9"
 
       - name: Build APK (debug)
-        run: gradle :app:assembleDebug --no-daemon --console=plain
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --no-daemon --console=plain 2>&1 | tee build.log
+
+      - name: Ringkasan error (hanya jika gagal)
+        if: failure()
+        run: |
+          echo "=== BARIS PENTING (screenshot bagian ini) ==="
+          if [ -f build.log ]; then
+            grep -nE "^e: |error:|FAILURE:|What went wrong|Could not |not found|Unresolved reference" -A2 build.log | head -70 || true
+          else
+            echo "(build.log belum ada: gagalnya sebelum langkah Build APK)"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
