@@ -1,0 +1,1948 @@
+name: Build APK (satu file)
+
+# CARA PAKAI
+# 1. Di repo GitHub kamu: Add file > Create new file, beri nama  .github/workflows/build.yml
+# 2. Tempel SELURUH isi file ini, lalu Commit changes.
+# 3. Buka tab Actions, tunggu build selesai, unduh APK di bagian Artifacts.
+#
+# File ini membuat seluruh project Android di dalam server GitHub (tidak perlu upload folder),
+# mengunduh core mGBA, lalu membuild APK. Isi tiap file project ada di langkah "Tulis ..." di bawah
+# dan bisa diedit langsung di sini (mis. shader di langkah "Tulis app/src/main/assets/shaders/final.frag").
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tulis settings.gradle.kts
+        run: |
+          mkdir -p '.'
+          cat > 'settings.gradle.kts' <<'GBA_FILE_EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "GBAShaderPlayer"
+          include(":app")
+          GBA_FILE_EOF
+
+      - name: Tulis build.gradle.kts
+        run: |
+          mkdir -p '.'
+          cat > 'build.gradle.kts' <<'GBA_FILE_EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis gradle.properties
+        run: |
+          mkdir -p '.'
+          cat > 'gradle.properties' <<'GBA_FILE_EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          kotlin.code.style=official
+          GBA_FILE_EOF
+
+      - name: Tulis app/build.gradle.kts
+        run: |
+          mkdir -p 'app'
+          cat > 'app/build.gradle.kts' <<'GBA_FILE_EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "id.gba.shaderplayer"
+              compileSdk = 34
+              ndkVersion = "26.1.10909125"
+
+              defaultConfig {
+                  applicationId = "id.gba.shaderplayer"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+                  ndk {
+                      abiFilters.add("arm64-v8a")
+                  }
+              }
+
+              externalNativeBuild {
+                  cmake {
+                      path = file("src/main/cpp/CMakeLists.txt")
+                      version = "3.22.1"
+                  }
+              }
+
+              // Core mGBA (.so) di-dlopen dari folder native app, jadi harus diekstrak saat install.
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/AndroidManifest.xml
+        run: |
+          mkdir -p 'app/src/main'
+          cat > 'app/src/main/AndroidManifest.xml' <<'GBA_FILE_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-feature
+                  android:glEsVersion="0x00030000"
+                  android:required="true" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="GBA Shader Player"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+              </application>
+          </manifest>
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/cpp/CMakeLists.txt
+        run: |
+          mkdir -p 'app/src/main/cpp'
+          cat > 'app/src/main/cpp/CMakeLists.txt' <<'GBA_FILE_EOF'
+          cmake_minimum_required(VERSION 3.22.1)
+          project(gbanative LANGUAGES CXX)
+
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+          add_library(gbanative SHARED native-lib.cpp)
+
+          find_library(log-lib log)
+          target_link_libraries(gbanative ${log-lib} dl)
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/cpp/native-lib.cpp
+        run: |
+          mkdir -p 'app/src/main/cpp'
+          cat > 'app/src/main/cpp/native-lib.cpp' <<'GBA_FILE_EOF'
+          // Frontend libretro minimal untuk GBA (core mGBA), dipanggil dari Kotlin lewat JNI.
+          // Tugasnya: dlopen core, jalankan frame, konversi video ke RGBA, resample audio ke 48 kHz,
+          // terima input tombol, simpan/muat SRAM dan save state.
+
+          #include <jni.h>
+          #include <android/log.h>
+          #include <dlfcn.h>
+
+          #include <algorithm>
+          #include <atomic>
+          #include <cstdarg>
+          #include <cstdint>
+          #include <cstdio>
+          #include <cstring>
+          #include <map>
+          #include <mutex>
+          #include <string>
+          #include <vector>
+
+          #define TAG "GBAShader"
+          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+          // ===================== Subset libretro.h =====================
+          #define RETRO_DEVICE_JOYPAD 1
+          #define RETRO_MEMORY_SAVE_RAM 0
+
+          #define ENV_GET_CAN_DUPE 3
+          #define ENV_SET_MESSAGE 6
+          #define ENV_SET_PERFORMANCE_LEVEL 8
+          #define ENV_GET_SYSTEM_DIRECTORY 9
+          #define ENV_SET_PIXEL_FORMAT 10
+          #define ENV_SET_INPUT_DESCRIPTORS 11
+          #define ENV_GET_VARIABLE 15
+          #define ENV_SET_VARIABLES 16
+          #define ENV_GET_VARIABLE_UPDATE 17
+          #define ENV_SET_SUPPORT_NO_GAME 18
+          #define ENV_GET_LOG_INTERFACE 27
+          #define ENV_GET_SAVE_DIRECTORY 31
+          #define ENV_SET_SYSTEM_AV_INFO 32
+          #define ENV_SET_CONTROLLER_INFO 35
+          #define ENV_SET_GEOMETRY 37
+          #define ENV_SET_SERIALIZATION_QUIRKS 44
+
+          struct retro_game_geometry {
+              unsigned base_width;
+              unsigned base_height;
+              unsigned max_width;
+              unsigned max_height;
+              float aspect_ratio;
+          };
+          struct retro_system_timing {
+              double fps;
+              double sample_rate;
+          };
+          struct retro_system_av_info {
+              retro_game_geometry geometry;
+              retro_system_timing timing;
+          };
+          struct retro_system_info {
+              const char* library_name;
+              const char* library_version;
+              const char* valid_extensions;
+              bool need_fullpath;
+              bool block_extract;
+          };
+          struct retro_game_info {
+              const char* path;
+              const void* data;
+              size_t size;
+              const char* meta;
+          };
+          struct retro_variable {
+              const char* key;
+              const char* value;
+          };
+          struct retro_log_callback {
+              void (*log)(int level, const char* fmt, ...);
+          };
+
+          typedef bool (*retro_environment_t)(unsigned cmd, void* data);
+          typedef void (*retro_video_refresh_t)(const void* data, unsigned width, unsigned height, size_t pitch);
+          typedef void (*retro_audio_sample_t)(int16_t left, int16_t right);
+          typedef size_t (*retro_audio_sample_batch_t)(const int16_t* data, size_t frames);
+          typedef void (*retro_input_poll_t)(void);
+          typedef int16_t (*retro_input_state_t)(unsigned port, unsigned device, unsigned index, unsigned id);
+
+          // ===================== Fungsi dari core =====================
+          static void* g_lib = nullptr;
+
+          static void (*fn_set_environment)(retro_environment_t) = nullptr;
+          static void (*fn_set_video_refresh)(retro_video_refresh_t) = nullptr;
+          static void (*fn_set_audio_sample)(retro_audio_sample_t) = nullptr;
+          static void (*fn_set_audio_sample_batch)(retro_audio_sample_batch_t) = nullptr;
+          static void (*fn_set_input_poll)(retro_input_poll_t) = nullptr;
+          static void (*fn_set_input_state)(retro_input_state_t) = nullptr;
+          static void (*fn_init)(void) = nullptr;
+          static void (*fn_deinit)(void) = nullptr;
+          static void (*fn_get_system_info)(retro_system_info*) = nullptr;
+          static void (*fn_get_av_info)(retro_system_av_info*) = nullptr;
+          static void (*fn_reset)(void) = nullptr;
+          static void (*fn_run)(void) = nullptr;
+          static size_t (*fn_serialize_size)(void) = nullptr;
+          static bool (*fn_serialize)(void*, size_t) = nullptr;
+          static bool (*fn_unserialize)(const void*, size_t) = nullptr;
+          static bool (*fn_load_game)(const retro_game_info*) = nullptr;
+          static void (*fn_unload_game)(void) = nullptr;
+          static void* (*fn_get_memory_data)(unsigned) = nullptr;
+          static size_t (*fn_get_memory_size)(unsigned) = nullptr;
+
+          #define BIND(var, sym)                                                        \
+              do {                                                                      \
+                  var = reinterpret_cast<decltype(var)>(dlsym(g_lib, sym));             \
+                  if (!var && !missing) missing = sym;                                  \
+              } while (0)
+
+          // ===================== State global =====================
+          static std::mutex g_core_mtx;   // semua panggilan ke core diserialkan
+          static std::mutex g_frame_mtx;
+          static std::mutex g_audio_mtx;
+
+          static bool g_loaded = false;
+          static std::string g_system_dir, g_save_dir, g_sram_path, g_state_path, g_rom_name, g_rom_tmp;
+          static std::map<std::string, std::string> g_vars;
+          static unsigned g_pixfmt = 0;  // 0 = 0RGB1555 (default libretro), 1 = XRGB8888, 2 = RGB565
+
+          static std::vector<uint32_t> g_frame;  // RGBA (byte R,G,B,A)
+          static int g_fw = 0, g_fh = 0;
+          static bool g_dirty = false;
+
+          static const double OUT_RATE = 48000.0;
+          static std::vector<int16_t> g_audio;   // stereo 48 kHz, interleaved
+          static double g_ratio = 32768.0 / OUT_RATE;
+          static double g_pos = 0.0;
+          static int16_t g_prev_l = 0, g_prev_r = 0;
+
+          static std::atomic<int> g_buttons{0};
+          static std::vector<uint8_t> g_rom;
+          static std::vector<uint8_t> g_last_sram;
+          static double g_fps = 59.7275, g_in_rate = 32768.0;
+          static int g_base_w = 240, g_base_h = 160;
+
+          // ===================== Callback untuk core =====================
+          static void log_cb(int level, const char* fmt, ...) {
+              va_list ap;
+              va_start(ap, fmt);
+              __android_log_vprint(level >= 3 ? ANDROID_LOG_ERROR : ANDROID_LOG_DEBUG, "core", fmt, ap);
+              va_end(ap);
+          }
+
+          static void apply_av(const retro_system_av_info& av) {
+              std::lock_guard<std::mutex> lk(g_audio_mtx);
+              if (av.timing.fps > 1.0) g_fps = av.timing.fps;
+              if (av.timing.sample_rate > 1.0) g_in_rate = av.timing.sample_rate;
+              g_ratio = g_in_rate / OUT_RATE;
+              g_base_w = static_cast<int>(av.geometry.base_width);
+              g_base_h = static_cast<int>(av.geometry.base_height);
+          }
+
+          static bool env_cb(unsigned cmd, void* data) {
+              switch (cmd) {
+                  case ENV_GET_CAN_DUPE:
+                      *static_cast<bool*>(data) = true;
+                      return true;
+                  case ENV_SET_PIXEL_FORMAT: {
+                      const unsigned f = *static_cast<const unsigned*>(data);
+                      if (f > 2) return false;
+                      g_pixfmt = f;
+                      return true;
+                  }
+                  case ENV_GET_SYSTEM_DIRECTORY:
+                      *static_cast<const char**>(data) = g_system_dir.c_str();
+                      return true;
+                  case ENV_GET_SAVE_DIRECTORY:
+                      *static_cast<const char**>(data) = g_save_dir.c_str();
+                      return true;
+                  case ENV_GET_LOG_INTERFACE:
+                      static_cast<retro_log_callback*>(data)->log = log_cb;
+                      return true;
+                  case ENV_SET_VARIABLES: {
+                      // Format tiap entri: "Judul; nilai_default|nilai_lain|..."
+                      const retro_variable* v = static_cast<const retro_variable*>(data);
+                      for (; v && v->key; ++v) {
+                          const std::string val = v->value ? v->value : "";
+                          const size_t semi = val.find("; ");
+                          if (semi == std::string::npos) continue;
+                          const std::string opts = val.substr(semi + 2);
+                          const size_t bar = opts.find('|');
+                          g_vars[v->key] = opts.substr(0, bar);
+                      }
+                      return true;
+                  }
+                  case ENV_GET_VARIABLE: {
+                      retro_variable* v = static_cast<retro_variable*>(data);
+                      if (!v || !v->key) return false;
+                      const auto it = g_vars.find(v->key);
+                      if (it == g_vars.end()) return false;
+                      v->value = it->second.c_str();
+                      return true;
+                  }
+                  case ENV_GET_VARIABLE_UPDATE:
+                      *static_cast<bool*>(data) = false;
+                      return true;
+                  case ENV_SET_SYSTEM_AV_INFO:
+                      apply_av(*static_cast<const retro_system_av_info*>(data));
+                      return true;
+                  case ENV_SET_GEOMETRY:
+                  case ENV_SET_INPUT_DESCRIPTORS:
+                  case ENV_SET_CONTROLLER_INFO:
+                  case ENV_SET_SERIALIZATION_QUIRKS:
+                  case ENV_SET_PERFORMANCE_LEVEL:
+                  case ENV_SET_SUPPORT_NO_GAME:
+                  case ENV_SET_MESSAGE:
+                      return true;
+                  default:
+                      return false;  // hw render, sensor, rumble, dll: tidak didukung
+              }
+          }
+
+          static inline uint32_t expand5(uint32_t v) { return (v << 3) | (v >> 2); }
+
+          static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch) {
+              if (!data || w == 0 || h == 0 || w > 1024 || h > 1024) return;  // data null = frame sama
+              std::lock_guard<std::mutex> lk(g_frame_mtx);
+              if (g_frame.size() < static_cast<size_t>(w) * h) g_frame.resize(static_cast<size_t>(w) * h);
+              const uint8_t* src = static_cast<const uint8_t*>(data);
+              for (unsigned y = 0; y < h; ++y) {
+                  const uint8_t* row = src + static_cast<size_t>(y) * pitch;
+                  uint32_t* dst = &g_frame[static_cast<size_t>(y) * w];
+                  if (g_pixfmt == 1) {  // XRGB8888
+                      const uint32_t* s = reinterpret_cast<const uint32_t*>(row);
+                      for (unsigned x = 0; x < w; ++x) {
+                          const uint32_t p = s[x];
+                          dst[x] = 0xFF000000u | ((p & 0xFFu) << 16) | (p & 0xFF00u) | ((p >> 16) & 0xFFu);
+                      }
+                  } else if (g_pixfmt == 2) {  // RGB565
+                      const uint16_t* s = reinterpret_cast<const uint16_t*>(row);
+                      for (unsigned x = 0; x < w; ++x) {
+                          const uint32_t p = s[x];
+                          const uint32_t r = expand5((p >> 11) & 31u);
+                          const uint32_t g = (((p >> 5) & 63u) << 2) | (((p >> 5) & 63u) >> 4);
+                          const uint32_t b = expand5(p & 31u);
+                          dst[x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+                      }
+                  } else {  // 0RGB1555
+                      const uint16_t* s = reinterpret_cast<const uint16_t*>(row);
+                      for (unsigned x = 0; x < w; ++x) {
+                          const uint32_t p = s[x];
+                          const uint32_t r = expand5((p >> 10) & 31u);
+                          const uint32_t g = expand5((p >> 5) & 31u);
+                          const uint32_t b = expand5(p & 31u);
+                          dst[x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+                      }
+                  }
+              }
+              g_fw = static_cast<int>(w);
+              g_fh = static_cast<int>(h);
+              g_dirty = true;
+          }
+
+          // Resample linear dari sample rate core (mGBA: 32768 Hz) ke 48 kHz.
+          static void push_audio(const int16_t* d, size_t frames) {
+              std::lock_guard<std::mutex> lk(g_audio_mtx);
+              if (g_audio.size() > 96000) g_audio.clear();  // konsumer macet: buang saja
+              for (size_t i = 0; i < frames; ++i) {
+                  const int16_t cl = d[2 * i];
+                  const int16_t cr = d[2 * i + 1];
+                  while (g_pos < 1.0) {
+                      const float t = static_cast<float>(g_pos);
+                      g_audio.push_back(static_cast<int16_t>(g_prev_l + (cl - g_prev_l) * t));
+                      g_audio.push_back(static_cast<int16_t>(g_prev_r + (cr - g_prev_r) * t));
+                      g_pos += g_ratio;
+                  }
+                  g_pos -= 1.0;
+                  g_prev_l = cl;
+                  g_prev_r = cr;
+              }
+          }
+
+          static size_t audio_batch_cb(const int16_t* d, size_t frames) {
+              push_audio(d, frames);
+              return frames;
+          }
+
+          static void audio_sample_cb(int16_t l, int16_t r) {
+              const int16_t b[2] = {l, r};
+              push_audio(b, 1);
+          }
+
+          static void input_poll_cb(void) {}
+
+          static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id) {
+              if (port != 0 || device != RETRO_DEVICE_JOYPAD || index != 0 || id > 15) return 0;
+              return static_cast<int16_t>((g_buttons.load() >> id) & 1);
+          }
+
+          // ===================== Util =====================
+          static std::string jstr(JNIEnv* env, jstring s) {
+              if (!s) return "";
+              const char* c = env->GetStringUTFChars(s, nullptr);
+              std::string r = c ? c : "";
+              if (c) env->ReleaseStringUTFChars(s, c);
+              return r;
+          }
+
+          static void load_sram_locked() {
+              void* ptr = fn_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+              const size_t sz = fn_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+              if (!ptr || sz == 0) {
+                  g_last_sram.clear();
+                  return;
+              }
+              FILE* f = fopen(g_sram_path.c_str(), "rb");
+              if (f) {
+                  std::vector<uint8_t> buf(sz);
+                  const size_t r = fread(buf.data(), 1, sz, f);
+                  fclose(f);
+                  if (r > 0) memcpy(ptr, buf.data(), r);
+              }
+              g_last_sram.assign(static_cast<uint8_t*>(ptr), static_cast<uint8_t*>(ptr) + sz);
+          }
+
+          static void save_sram_locked() {
+              if (!g_lib || !g_loaded) return;
+              void* ptr = fn_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+              const size_t sz = fn_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+              if (!ptr || sz == 0) return;
+              if (g_last_sram.size() == sz && memcmp(g_last_sram.data(), ptr, sz) == 0) return;  // tidak berubah
+              FILE* f = fopen(g_sram_path.c_str(), "wb");
+              if (!f) {
+                  LOGE("Gagal menulis SRAM: %s", g_sram_path.c_str());
+                  return;
+              }
+              fwrite(ptr, 1, sz, f);
+              fclose(f);
+              g_last_sram.assign(static_cast<uint8_t*>(ptr), static_cast<uint8_t*>(ptr) + sz);
+          }
+
+          static void unload_locked() {
+              if (!g_lib) return;
+              if (g_loaded) {
+                  save_sram_locked();
+                  fn_unload_game();
+                  g_loaded = false;
+              }
+              if (fn_deinit) fn_deinit();
+              dlclose(g_lib);
+              g_lib = nullptr;
+          }
+
+          // ===================== JNI =====================
+          extern "C" {
+
+          JNIEXPORT jstring JNICALL Java_id_gba_shaderplayer_Native_loadCore(
+                  JNIEnv* env, jobject, jstring jcore, jstring jsys, jstring jsave) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              unload_locked();
+              const std::string core = jstr(env, jcore);
+              g_system_dir = jstr(env, jsys);
+              g_save_dir = jstr(env, jsave);
+
+              g_lib = dlopen(core.c_str(), RTLD_NOW | RTLD_LOCAL);
+              if (!g_lib) {
+                  const char* e = dlerror();
+                  const std::string msg = std::string("Gagal memuat core mGBA: ") + (e ? e : "?");
+                  LOGE("%s", msg.c_str());
+                  return env->NewStringUTF(msg.c_str());
+              }
+
+              const char* missing = nullptr;
+              BIND(fn_set_environment, "retro_set_environment");
+              BIND(fn_set_video_refresh, "retro_set_video_refresh");
+              BIND(fn_set_audio_sample, "retro_set_audio_sample");
+              BIND(fn_set_audio_sample_batch, "retro_set_audio_sample_batch");
+              BIND(fn_set_input_poll, "retro_set_input_poll");
+              BIND(fn_set_input_state, "retro_set_input_state");
+              BIND(fn_init, "retro_init");
+              BIND(fn_deinit, "retro_deinit");
+              BIND(fn_get_system_info, "retro_get_system_info");
+              BIND(fn_get_av_info, "retro_get_system_av_info");
+              BIND(fn_reset, "retro_reset");
+              BIND(fn_run, "retro_run");
+              BIND(fn_serialize_size, "retro_serialize_size");
+              BIND(fn_serialize, "retro_serialize");
+              BIND(fn_unserialize, "retro_unserialize");
+              BIND(fn_load_game, "retro_load_game");
+              BIND(fn_unload_game, "retro_unload_game");
+              BIND(fn_get_memory_data, "retro_get_memory_data");
+              BIND(fn_get_memory_size, "retro_get_memory_size");
+              if (missing) {
+                  const std::string msg = std::string("Core tidak lengkap, simbol hilang: ") + missing;
+                  dlclose(g_lib);
+                  g_lib = nullptr;
+                  fn_deinit = nullptr;
+                  return env->NewStringUTF(msg.c_str());
+              }
+
+              g_vars.clear();
+              g_pixfmt = 0;
+              g_loaded = false;
+              {
+                  std::lock_guard<std::mutex> a(g_audio_mtx);
+                  g_audio.clear();
+              }
+              fn_set_environment(env_cb);
+              fn_init();
+              fn_set_video_refresh(video_cb);
+              fn_set_audio_sample(audio_sample_cb);
+              fn_set_audio_sample_batch(audio_batch_cb);
+              fn_set_input_poll(input_poll_cb);
+              fn_set_input_state(input_state_cb);
+              return nullptr;
+          }
+
+          JNIEXPORT jstring JNICALL Java_id_gba_shaderplayer_Native_loadGame(
+                  JNIEnv* env, jobject, jbyteArray rom, jstring jname) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              if (!g_lib) return env->NewStringUTF("Core belum dimuat");
+
+              g_rom_name = jstr(env, jname);
+              const jsize n = env->GetArrayLength(rom);
+              g_rom.assign(static_cast<size_t>(n), 0);
+              env->GetByteArrayRegion(rom, 0, n, reinterpret_cast<jbyte*>(g_rom.data()));
+
+              std::string base = g_rom_name;
+              std::string ext;
+              const size_t dot = base.rfind('.');
+              if (dot != std::string::npos) {
+                  ext = base.substr(dot);
+                  base = base.substr(0, dot);
+              }
+              for (char& ch : base) {
+                  if (ch == '/' || ch == '\\') ch = '_';
+              }
+              if (base.empty()) base = "game";
+              g_sram_path = g_save_dir + "/" + base + ".srm";
+              g_state_path = g_save_dir + "/" + base + ".state";
+
+              retro_system_info si;
+              memset(&si, 0, sizeof(si));
+              fn_get_system_info(&si);
+
+              retro_game_info gi;
+              memset(&gi, 0, sizeof(gi));
+              if (si.need_fullpath) {
+                  g_rom_tmp = g_save_dir + "/_rom_tmp" + ext;
+                  FILE* f = fopen(g_rom_tmp.c_str(), "wb");
+                  if (!f) return env->NewStringUTF("Tidak bisa menulis ROM sementara");
+                  fwrite(g_rom.data(), 1, g_rom.size(), f);
+                  fclose(f);
+                  gi.path = g_rom_tmp.c_str();
+              } else {
+                  gi.path = g_rom_name.c_str();
+                  gi.data = g_rom.data();
+                  gi.size = g_rom.size();
+              }
+
+              if (!fn_load_game(&gi)) return env->NewStringUTF("Core menolak ROM ini (retro_load_game gagal)");
+              g_loaded = true;
+
+              retro_system_av_info av;
+              memset(&av, 0, sizeof(av));
+              fn_get_av_info(&av);
+              apply_av(av);
+              {
+                  std::lock_guard<std::mutex> a(g_audio_mtx);
+                  g_audio.clear();
+                  g_pos = 0.0;
+                  g_prev_l = 0;
+                  g_prev_r = 0;
+              }
+              load_sram_locked();
+              return nullptr;
+          }
+
+          JNIEXPORT void JNICALL Java_id_gba_shaderplayer_Native_runFrame(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              if (g_lib && g_loaded) fn_run();
+          }
+
+          JNIEXPORT void JNICALL Java_id_gba_shaderplayer_Native_reset(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              if (g_lib && g_loaded) fn_reset();
+          }
+
+          // Mengembalikan (lebar << 16) | tinggi kalau ada frame baru, selain itu 0.
+          JNIEXPORT jint JNICALL Java_id_gba_shaderplayer_Native_getFrame(JNIEnv* env, jobject, jobject buf) {
+              std::lock_guard<std::mutex> lk(g_frame_mtx);
+              if (!g_dirty || g_fw <= 0 || g_fh <= 0) return 0;
+              void* dst = env->GetDirectBufferAddress(buf);
+              const jlong cap = env->GetDirectBufferCapacity(buf);
+              const size_t need = static_cast<size_t>(g_fw) * static_cast<size_t>(g_fh) * 4;
+              if (!dst || cap < static_cast<jlong>(need)) return 0;
+              memcpy(dst, g_frame.data(), need);
+              g_dirty = false;
+              return (g_fw << 16) | g_fh;
+          }
+
+          // Mengisi array dengan sample stereo 48 kHz (interleaved). Mengembalikan jumlah short.
+          JNIEXPORT jint JNICALL Java_id_gba_shaderplayer_Native_drainAudio(JNIEnv* env, jobject, jshortArray arr) {
+              std::lock_guard<std::mutex> lk(g_audio_mtx);
+              const jsize cap = env->GetArrayLength(arr);
+              jsize n = static_cast<jsize>(std::min<size_t>(g_audio.size(), static_cast<size_t>(cap)));
+              n &= ~1;  // jaga pasangan kiri/kanan
+              if (n <= 0) return 0;
+              env->SetShortArrayRegion(arr, 0, n, g_audio.data());
+              g_audio.erase(g_audio.begin(), g_audio.begin() + n);
+              return n;
+          }
+
+          // [fps, sampleRateCore, lebarDasar, tinggiDasar]
+          JNIEXPORT jdoubleArray JNICALL Java_id_gba_shaderplayer_Native_avInfo(JNIEnv* env, jobject) {
+              jdoubleArray arr = env->NewDoubleArray(4);
+              const jdouble v[4] = {g_fps, g_in_rate, static_cast<double>(g_base_w), static_cast<double>(g_base_h)};
+              env->SetDoubleArrayRegion(arr, 0, 4, v);
+              return arr;
+          }
+
+          JNIEXPORT void JNICALL Java_id_gba_shaderplayer_Native_setButtons(JNIEnv*, jobject, jint mask) {
+              g_buttons.store(mask);
+          }
+
+          JNIEXPORT void JNICALL Java_id_gba_shaderplayer_Native_saveSram(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              save_sram_locked();
+          }
+
+          JNIEXPORT jboolean JNICALL Java_id_gba_shaderplayer_Native_saveState(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              if (!g_lib || !g_loaded) return JNI_FALSE;
+              const size_t sz = fn_serialize_size();
+              if (sz == 0) return JNI_FALSE;
+              std::vector<uint8_t> buf(sz);
+              if (!fn_serialize(buf.data(), sz)) return JNI_FALSE;
+              FILE* f = fopen(g_state_path.c_str(), "wb");
+              if (!f) return JNI_FALSE;
+              const size_t w = fwrite(buf.data(), 1, sz, f);
+              fclose(f);
+              return w == sz ? JNI_TRUE : JNI_FALSE;
+          }
+
+          JNIEXPORT jboolean JNICALL Java_id_gba_shaderplayer_Native_loadState(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              if (!g_lib || !g_loaded) return JNI_FALSE;
+              FILE* f = fopen(g_state_path.c_str(), "rb");
+              if (!f) return JNI_FALSE;
+              fseek(f, 0, SEEK_END);
+              const long len = ftell(f);
+              fseek(f, 0, SEEK_SET);
+              if (len <= 0) {
+                  fclose(f);
+                  return JNI_FALSE;
+              }
+              std::vector<uint8_t> buf(static_cast<size_t>(len));
+              const size_t r = fread(buf.data(), 1, buf.size(), f);
+              fclose(f);
+              if (r != buf.size()) return JNI_FALSE;
+              return fn_unserialize(buf.data(), buf.size()) ? JNI_TRUE : JNI_FALSE;
+          }
+
+          JNIEXPORT void JNICALL Java_id_gba_shaderplayer_Native_unload(JNIEnv*, jobject) {
+              std::lock_guard<std::mutex> lk(g_core_mtx);
+              unload_locked();
+          }
+
+          }  // extern "C"
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/assets/shaders/vertex.vert
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/vertex.vert' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Segitiga layar penuh tanpa buffer: 3 titik dibentuk dari gl_VertexID.
+          uniform float uFlip;   // 0 = urutan baris sama dengan gambar (pass ke FBO), 1 = dibalik (pass ke layar)
+          out vec2 vUV;
+          void main() {
+              vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+              vUV = vec2(p.x, mix(p.y, 1.0 - p.y, uFlip));
+              gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/assets/shaders/plain.frag
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/plain.frag' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Cadangan: tampilkan tekstur apa adanya (dipakai kalau final.frag gagal dikompilasi).
+          precision mediump float;
+          uniform highp sampler2D uSrc;
+          in vec2 vUV;
+          out vec4 outColor;
+          void main() {
+              outColor = vec4(texture(uSrc, vUV).rgb, 1.0);
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/assets/shaders/epx.frag
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/epx.frag' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Upscale 2x tepi-cerdas (Scale2x / EPX). Dipanggil 2 kali berurutan => Scale4x.
+          // Piksel keluaran = piksel sumber, kecuali sudut yang jelas membentuk diagonal: diisi warna tetangga.
+          precision highp float;
+          precision highp int;
+          uniform highp sampler2D uTex;
+          in vec2 vUV;
+          out vec4 outColor;
+
+          vec4 px(ivec2 p, ivec2 sz) {
+              return texelFetch(uTex, clamp(p, ivec2(0), sz - ivec2(1)), 0);
+          }
+
+          void main() {
+              ivec2 sz = textureSize(uTex, 0);
+              ivec2 o = ivec2(gl_FragCoord.xy);   // koordinat piksel keluaran
+              ivec2 s = o / 2;                    // piksel sumber
+              ivec2 q = o - s * 2;                // sub-piksel (0/1), q.y = 0 berarti separuh atas gambar
+
+              vec4 E = px(s, sz);
+              vec4 B = px(s + ivec2(0, -1), sz);  // atas
+              vec4 D = px(s + ivec2(-1, 0), sz);  // kiri
+              vec4 F = px(s + ivec2(1, 0), sz);   // kanan
+              vec4 H = px(s + ivec2(0, 1), sz);   // bawah
+
+              vec4 r = E;
+              if (q.y == 0) {
+                  if (q.x == 0) { if (D == B && B != F && D != H) r = D; }
+                  else          { if (B == F && B != D && F != H) r = F; }
+              } else {
+                  if (q.x == 0) { if (D == H && D != B && H != F) r = D; }
+                  else          { if (H == F && D != H && B != F) r = F; }
+              }
+              outColor = r;
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/assets/shaders/final.frag
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/final.frag' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Pass akhir: sampling tajam/halus + warna layar GBA + grid LCD + glow (cahaya) + vignette.
+          // Semua nilai diatur dari GameRenderer.kt (preset "Cahaya"); ubah di sini kalau mau rumus lain.
+          precision highp float;
+          precision highp int;
+          uniform highp sampler2D uSrc;
+          uniform vec2  uBaseSize;   // ukuran asli frame (mis. 240x160)
+          uniform float uSharp;      // 1 = sharp bilinear anti-alias, 0 = sampling biasa
+          uniform float uColor;      // 0..1  campuran koreksi warna LCD GBA
+          uniform float uGrid;       // 0..1  kekuatan garis kisi antar piksel
+          uniform float uGlow;       // 0..2  kekuatan glow dari area terang
+          uniform float uVignette;   // 0..1  gelap di tepi layar
+          uniform float uBright;     // pengali kecerahan untuk warna terkoreksi
+          uniform vec3  uTint;       // nada warna (hangat = merah naik, biru turun)
+          in vec2 vUV;
+          out vec4 outColor;
+
+          const vec2 K[8] = vec2[8](
+              vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
+              vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707)
+          );
+
+          vec3 fetchColor(vec2 uv, vec2 fw) {
+              if (uSharp > 0.5) {
+                  vec2 p = uv * uBaseSize;
+                  vec2 seam = floor(p + 0.5);
+                  p = seam + clamp((p - seam) / fw, -0.5, 0.5);
+                  return texture(uSrc, p / uBaseSize).rgb;
+              }
+              return texture(uSrc, uv).rgb;
+          }
+
+          vec3 brightPass(vec3 c) {
+              return max(c - vec3(0.55), vec3(0.0));
+          }
+
+          // Meniru layar GBA: gamma LCD tinggi, warna saling bercampur sedikit.
+          vec3 lcdColor(vec3 c) {
+              vec3 lin = pow(c, vec3(3.2));
+              vec3 m = vec3(dot(lin, vec3(0.86, 0.10, 0.04)),
+                            dot(lin, vec3(0.12, 0.80, 0.08)),
+                            dot(lin, vec3(0.00, 0.14, 0.86)));
+              return pow(m, vec3(1.0 / 2.2));
+          }
+
+          void main() {
+              vec2 p = vUV * uBaseSize;
+              vec2 fw = max(fwidth(p), vec2(0.0001));
+              vec3 c = fetchColor(vUV, fw);
+
+              // Glow: ambil bagian terang di sekitar, rata-ratakan, tambahkan kembali.
+              vec3 glow = vec3(0.0);
+              if (uGlow > 0.0) {
+                  for (int i = 0; i < 8; i++) {
+                      vec2 d = K[i] / uBaseSize;
+                      glow += brightPass(fetchColor(vUV + d * 1.5, fw));
+                      glow += brightPass(fetchColor(vUV + d * 3.5, fw));
+                  }
+                  glow /= 16.0;
+              }
+
+              vec3 corrected = lcdColor(c) * uBright;
+              vec3 col = mix(c, corrected, uColor);
+
+              // Kisi LCD: gelap tipis di batas antar piksel sumber.
+              vec2 f = fract(p);
+              vec2 g = smoothstep(vec2(0.0), vec2(0.20), f) * (1.0 - smoothstep(vec2(0.80), vec2(1.0), f));
+              col *= mix(1.0, g.x * g.y, uGrid);
+
+              // Vignette lembut.
+              vec2 q = vUV - 0.5;
+              col *= 1.0 - uVignette * dot(q, q) * 1.8;
+
+              col += glow * uGlow;
+              col *= uTint;
+              outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/Native.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/Native.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          import java.nio.ByteBuffer
+
+          /** Jembatan ke native-lib.cpp (frontend libretro). Semua fungsi aman dipanggil dari thread mana pun. */
+          object Native {
+              init {
+                  System.loadLibrary("gbanative")
+              }
+
+              /** Mengembalikan null kalau sukses, atau pesan error. */
+              external fun loadCore(corePath: String, systemDir: String, saveDir: String): String?
+              external fun loadGame(rom: ByteArray, romName: String): String?
+              external fun runFrame()
+              external fun reset()
+
+              /** Salin frame terbaru (RGBA) ke buffer. Hasil: (lebar shl 16) or tinggi, atau 0 kalau tidak ada frame baru. */
+              external fun getFrame(dst: ByteBuffer): Int
+
+              /** Ambil audio stereo 48 kHz. Hasil: jumlah short yang terisi. */
+              external fun drainAudio(dst: ShortArray): Int
+
+              /** [fps, sampleRateCore, lebarDasar, tinggiDasar] */
+              external fun avInfo(): DoubleArray
+              external fun setButtons(mask: Int)
+              external fun saveSram()
+              external fun saveState(): Boolean
+              external fun loadState(): Boolean
+              external fun unload()
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/Opts.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/Opts.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          /** Nama pilihan di menu. Urutan harus sama dengan logika di GameRenderer. */
+          object Opts {
+              val upscale = arrayOf("Tajam (anti-alias)", "Scale4x (EPX)", "Halus (bilinear)", "Piksel (nearest)")
+              val light = arrayOf("Mati", "GBA LCD", "Glow hangat", "Terang (SP)")
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/GameRenderer.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/GameRenderer.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          import android.content.Context
+          import android.opengl.GLES30
+          import android.opengl.GLSurfaceView
+          import java.nio.ByteBuffer
+          import java.nio.ByteOrder
+          import javax.microedition.khronos.egl.EGLConfig
+          import javax.microedition.khronos.opengles.GL10
+
+          /**
+           * Renderer OpenGL ES 3.0.
+           * Alur: frame core -> (opsional) Scale4x/EPX 2 pass -> pass akhir (warna LCD, kisi, glow, vignette) -> layar.
+           * Semua shader ada di assets/shaders/ dan bisa diedit. Kalau shader gagal kompilasi, muncul toast berisi
+           * log error dan aplikasi memakai tampilan cadangan (bukan layar hitam).
+           */
+          class GameRenderer(
+              private val ctx: Context,
+              private val onError: (String) -> Unit
+          ) : GLSurfaceView.Renderer {
+
+              /** Indeks Opts.upscale: 0 tajam, 1 Scale4x, 2 bilinear, 3 nearest. */
+              @Volatile var upscale = 0
+
+              /** Indeks Opts.light -> baris di presets. */
+              @Volatile var light = 1
+
+              private class Light(
+                  val color: Float, val grid: Float, val glow: Float, val vig: Float,
+                  val bright: Float, val tr: Float, val tg: Float, val tb: Float
+              )
+
+              // color, grid, glow, vignette, kecerahan, tint R, G, B
+              private val presets = arrayOf(
+                  Light(0f, 0f, 0f, 0f, 1f, 1f, 1f, 1f),                       // Mati
+                  Light(1f, 0.55f, 0.15f, 0.10f, 1.25f, 1f, 1f, 1f),           // GBA LCD
+                  Light(0.6f, 0.15f, 0.9f, 0.30f, 1.05f, 1.04f, 1f, 0.92f),    // Glow hangat
+                  Light(0.5f, 0f, 0.25f, 0f, 1.15f, 1f, 1f, 1f)                // Terang (SP)
+              )
+
+              private val frameBuf: ByteBuffer =
+                  ByteBuffer.allocateDirect(512 * 512 * 4).order(ByteOrder.nativeOrder())
+
+              private var surfW = 1
+              private var surfH = 1
+              private var srcW = 0
+              private var srcH = 0
+              private var hasFrame = false
+              private var fboOk = true
+
+              private var texSrc = 0
+              private val texUp = IntArray(2)
+              private val fbo = IntArray(2)
+
+              private var progPlain = 0
+              private var progEpx = 0
+              private var progFinal = 0
+
+              override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+                  srcW = 0
+                  srcH = 0
+                  hasFrame = false
+                  fboOk = true
+                  texSrc = 0
+                  texUp[0] = 0
+                  texUp[1] = 0
+                  fbo[0] = 0
+                  fbo[1] = 0
+
+                  val vao = IntArray(1)
+                  GLES30.glGenVertexArrays(1, vao, 0)
+                  GLES30.glBindVertexArray(vao[0])
+
+                  progPlain = buildProgram("plain.frag")
+                  progEpx = buildProgram("epx.frag")
+                  progFinal = buildProgram("final.frag")
+              }
+
+              override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+                  surfW = width
+                  surfH = height
+              }
+
+              override fun onDrawFrame(gl: GL10?) {
+                  val packed = Native.getFrame(frameBuf)
+                  if (packed != 0) {
+                      val w = packed ushr 16
+                      val h = packed and 0xFFFF
+                      ensureTextures(w, h)
+                      frameBuf.position(0)
+                      GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texSrc)
+                      GLES30.glTexSubImage2D(
+                          GLES30.GL_TEXTURE_2D, 0, 0, 0, w, h,
+                          GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, frameBuf
+                      )
+                      hasFrame = true
+                  }
+
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                  GLES30.glViewport(0, 0, surfW, surfH)
+                  GLES30.glClearColor(0f, 0f, 0f, 1f)
+                  GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+                  if (!hasFrame || srcW == 0 || srcH == 0) return
+
+                  val prog = if (progFinal != 0) progFinal else progPlain
+                  if (prog == 0) return
+
+                  val mode = upscale
+
+                  // Filter tekstur sumber: nearest hanya untuk mode "Piksel".
+                  val filt = if (mode == 3) GLES30.GL_NEAREST else GLES30.GL_LINEAR
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texSrc)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, filt)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, filt)
+
+                  var inTex = texSrc
+                  if (mode == 1 && progEpx != 0 && fboOk) {
+                      runEpx(texSrc, fbo[0], srcW * 2, srcH * 2)
+                      runEpx(texUp[0], fbo[1], srcW * 4, srcH * 4)
+                      inTex = texUp[1]
+                  }
+
+                  // Posisi game di layar: potret = rata atas, lanskap = tengah.
+                  val aspect = srcW.toFloat() / srcH.toFloat()
+                  var vw = surfW
+                  var vh = surfH
+                  var vx = 0
+                  var vy = 0
+                  if (surfH >= surfW) {
+                      vw = surfW
+                      vh = (surfW / aspect).toInt()
+                      vy = surfH - vh
+                  } else {
+                      vh = surfH
+                      vw = (surfH * aspect).toInt()
+                      if (vw > surfW) {
+                          vw = surfW
+                          vh = (surfW / aspect).toInt()
+                      }
+                      vx = (surfW - vw) / 2
+                      vy = (surfH - vh) / 2
+                  }
+
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                  GLES30.glViewport(vx, vy, vw, vh)
+                  GLES30.glUseProgram(prog)
+                  GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inTex)
+
+                  val p = presets[light.coerceIn(0, presets.size - 1)]
+                  GLES30.glUniform1i(loc(prog, "uSrc"), 0)
+                  GLES30.glUniform1f(loc(prog, "uFlip"), 1f)
+                  GLES30.glUniform2f(loc(prog, "uBaseSize"), srcW.toFloat(), srcH.toFloat())
+                  GLES30.glUniform1f(loc(prog, "uSharp"), if (mode == 0) 1f else 0f)
+                  GLES30.glUniform1f(loc(prog, "uColor"), p.color)
+                  GLES30.glUniform1f(loc(prog, "uGrid"), p.grid)
+                  GLES30.glUniform1f(loc(prog, "uGlow"), p.glow)
+                  GLES30.glUniform1f(loc(prog, "uVignette"), p.vig)
+                  GLES30.glUniform1f(loc(prog, "uBright"), p.bright)
+                  GLES30.glUniform3f(loc(prog, "uTint"), p.tr, p.tg, p.tb)
+                  GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+              }
+
+              private fun runEpx(inTex: Int, outFbo: Int, w: Int, h: Int) {
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outFbo)
+                  GLES30.glViewport(0, 0, w, h)
+                  GLES30.glUseProgram(progEpx)
+                  GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inTex)
+                  GLES30.glUniform1i(loc(progEpx, "uTex"), 0)
+                  GLES30.glUniform1f(loc(progEpx, "uFlip"), 0f)
+                  GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+              }
+
+              private fun ensureTextures(w: Int, h: Int) {
+                  if (texSrc != 0 && w == srcW && h == srcH) return
+                  srcW = w
+                  srcH = h
+                  if (texSrc == 0) {
+                      val t = IntArray(3)
+                      GLES30.glGenTextures(3, t, 0)
+                      texSrc = t[0]
+                      texUp[0] = t[1]
+                      texUp[1] = t[2]
+                      val f = IntArray(2)
+                      GLES30.glGenFramebuffers(2, f, 0)
+                      fbo[0] = f[0]
+                      fbo[1] = f[1]
+                  }
+                  allocTex(texSrc, w, h)
+                  allocTex(texUp[0], w * 2, h * 2)
+                  allocTex(texUp[1], w * 4, h * 4)
+
+                  fboOk = true
+                  for (i in 0..1) {
+                      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[i])
+                      GLES30.glFramebufferTexture2D(
+                          GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                          GLES30.GL_TEXTURE_2D, texUp[i], 0
+                      )
+                      if (GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                          fboOk = false
+                      }
+                  }
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                  if (!fboOk) onError("FBO tidak lengkap, Scale4x dimatikan")
+              }
+
+              private fun allocTex(tex: Int, w: Int, h: Int) {
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+                  GLES30.glTexImage2D(
+                      GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0,
+                      GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
+                  )
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+              }
+
+              private fun loc(prog: Int, name: String): Int = GLES30.glGetUniformLocation(prog, name)
+
+              private fun asset(name: String): String =
+                  ctx.assets.open("shaders/$name").bufferedReader().use { it.readText() }
+
+              private fun compile(type: Int, src: String): Int {
+                  val s = GLES30.glCreateShader(type)
+                  GLES30.glShaderSource(s, src)
+                  GLES30.glCompileShader(s)
+                  val ok = IntArray(1)
+                  GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0)
+                  if (ok[0] == 0) {
+                      val log = GLES30.glGetShaderInfoLog(s)
+                      GLES30.glDeleteShader(s)
+                      throw RuntimeException(log)
+                  }
+                  return s
+              }
+
+              private fun buildProgram(fragAsset: String): Int {
+                  try {
+                      val vs = compile(GLES30.GL_VERTEX_SHADER, asset("vertex.vert"))
+                      val fs = compile(GLES30.GL_FRAGMENT_SHADER, asset(fragAsset))
+                      val p = GLES30.glCreateProgram()
+                      GLES30.glAttachShader(p, vs)
+                      GLES30.glAttachShader(p, fs)
+                      GLES30.glLinkProgram(p)
+                      val ok = IntArray(1)
+                      GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ok, 0)
+                      GLES30.glDeleteShader(vs)
+                      GLES30.glDeleteShader(fs)
+                      if (ok[0] == 0) {
+                          val log = GLES30.glGetProgramInfoLog(p)
+                          GLES30.glDeleteProgram(p)
+                          throw RuntimeException(log)
+                      }
+                      return p
+                  } catch (e: Exception) {
+                      onError("Shader " + fragAsset + " gagal: " + (e.message ?: "?").take(300))
+                      return 0
+                  }
+              }
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/GamepadView.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/GamepadView.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          import android.content.Context
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.Path
+          import android.graphics.RectF
+          import android.view.MotionEvent
+          import android.view.View
+
+          /** Kontrol layar sentuh: D-pad, A/B, L/R, Start/Select, dan tombol MENU. Bit tombol = id joypad libretro. */
+          class GamepadView(ctx: Context) : View(ctx) {
+
+              /** Dipanggil tiap kombinasi tombol sentuh berubah. */
+              var onMask: (Int) -> Unit = {}
+
+              /** Dipanggil saat tombol MENU disentuh. */
+              var onMenu: () -> Unit = {}
+
+              companion object {
+                  const val BTN_B = 0
+                  const val BTN_SELECT = 2
+                  const val BTN_START = 3
+                  const val BTN_UP = 4
+                  const val BTN_DOWN = 5
+                  const val BTN_LEFT = 6
+                  const val BTN_RIGHT = 7
+                  const val BTN_A = 8
+                  const val BTN_L = 10
+                  const val BTN_R = 11
+              }
+
+              private class Btn(val bit: Int, val label: String, val rect: RectF)
+
+              private val btns = ArrayList<Btn>()
+              private var menuRect = RectF()
+              private var dpCx = 0f
+              private var dpCy = 0f
+              private var dpR = 0f
+              private var mask = 0
+
+              private val dens = resources.displayMetrics.density
+              private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val line = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val txt = Paint(Paint.ANTI_ALIAS_FLAG)
+              private val path = Path()
+
+              init {
+                  line.style = Paint.Style.STROKE
+                  line.strokeWidth = 2f * dens
+                  line.color = Color.argb(140, 255, 255, 255)
+                  fill.style = Paint.Style.FILL
+                  txt.textAlign = Paint.Align.CENTER
+                  txt.isFakeBoldText = true
+                  txt.color = Color.argb(210, 255, 255, 255)
+              }
+
+              override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+                  super.onSizeChanged(w, h, oldw, oldh)
+                  btns.clear()
+                  val fw = w.toFloat()
+                  val fh = h.toFloat()
+                  if (fh >= fw) layoutPortrait(fw, fh) else layoutLandscape(fw, fh)
+              }
+
+              private fun circle(bit: Int, label: String, cx: Float, cy: Float, r: Float) {
+                  btns.add(Btn(bit, label, RectF(cx - r, cy - r, cx + r, cy + r)))
+              }
+
+              private fun pill(bit: Int, label: String, cx: Float, cy: Float, hw: Float, hh: Float) {
+                  btns.add(Btn(bit, label, RectF(cx - hw, cy - hh, cx + hw, cy + hh)))
+              }
+
+              // Potret: game di bagian atas (rasio 3:2), kontrol di bawahnya.
+              private fun layoutPortrait(w: Float, h: Float) {
+                  val top = w * 2f / 3f
+                  val ah = h - top
+                  dpR = w * 0.20f
+                  dpCx = w * 0.27f
+                  dpCy = top + ah * 0.50f
+                  circle(BTN_A, "A", w * 0.87f, top + ah * 0.40f, w * 0.085f)
+                  circle(BTN_B, "B", w * 0.67f, top + ah * 0.52f, w * 0.085f)
+                  pill(BTN_L, "L", w * 0.19f, top + w * 0.07f, w * 0.15f, w * 0.055f)
+                  pill(BTN_R, "R", w * 0.81f, top + w * 0.07f, w * 0.15f, w * 0.055f)
+                  pill(BTN_SELECT, "SELECT", w * 0.35f, h - w * 0.10f, w * 0.12f, w * 0.04f)
+                  pill(BTN_START, "START", w * 0.65f, h - w * 0.10f, w * 0.12f, w * 0.04f)
+                  menuRect = RectF(w * 0.43f, top + w * 0.02f, w * 0.57f, top + w * 0.12f)
+              }
+
+              // Lanskap: game di tengah, kontrol transparan di kiri/kanan.
+              private fun layoutLandscape(w: Float, h: Float) {
+                  val m = h * 0.06f
+                  dpR = h * 0.24f
+                  dpCx = m + dpR + w * 0.02f
+                  dpCy = h * 0.62f
+                  val r = h * 0.10f
+                  circle(BTN_A, "A", w - m - r - w * 0.02f, h * 0.52f, r)
+                  circle(BTN_B, "B", w - m - r - w * 0.02f - r * 2.4f, h * 0.68f, r)
+                  pill(BTN_L, "L", m + h * 0.17f, m + h * 0.07f, h * 0.17f, h * 0.065f)
+                  pill(BTN_R, "R", w - m - h * 0.17f, m + h * 0.07f, h * 0.17f, h * 0.065f)
+                  pill(BTN_SELECT, "SELECT", w / 2f - h * 0.20f, h - m - h * 0.04f, h * 0.14f, h * 0.045f)
+                  pill(BTN_START, "START", w / 2f + h * 0.20f, h - m - h * 0.04f, h * 0.14f, h * 0.045f)
+                  menuRect = RectF(w / 2f - h * 0.09f, m, w / 2f + h * 0.09f, m + h * 0.12f)
+              }
+
+              override fun onDraw(canvas: Canvas) {
+                  // D-pad
+                  canvas.drawCircle(dpCx, dpCy, dpR, line)
+                  val s = dpR * 0.22f
+                  val off = dpR * 0.62f
+                  arrow(canvas, dpCx, dpCy - off, 0f, -1f, s, (mask and (1 shl BTN_UP)) != 0)
+                  arrow(canvas, dpCx, dpCy + off, 0f, 1f, s, (mask and (1 shl BTN_DOWN)) != 0)
+                  arrow(canvas, dpCx - off, dpCy, -1f, 0f, s, (mask and (1 shl BTN_LEFT)) != 0)
+                  arrow(canvas, dpCx + off, dpCy, 1f, 0f, s, (mask and (1 shl BTN_RIGHT)) != 0)
+
+                  // Tombol A/B/L/R/Start/Select
+                  for (b in btns) {
+                      val on = (mask and (1 shl b.bit)) != 0
+                      fill.color = Color.argb(if (on) 130 else 40, 255, 255, 255)
+                      val rx = minOf(b.rect.width(), b.rect.height()) / 2f
+                      canvas.drawRoundRect(b.rect, rx, rx, fill)
+                      canvas.drawRoundRect(b.rect, rx, rx, line)
+                      drawLabel(canvas, b.label, b.rect)
+                  }
+
+                  // Menu
+                  fill.color = Color.argb(40, 255, 255, 255)
+                  canvas.drawRoundRect(menuRect, 12f * dens, 12f * dens, fill)
+                  canvas.drawRoundRect(menuRect, 12f * dens, 12f * dens, line)
+                  drawLabel(canvas, "MENU", menuRect)
+              }
+
+              private fun arrow(c: Canvas, cx: Float, cy: Float, dx: Float, dy: Float, s: Float, on: Boolean) {
+                  path.reset()
+                  path.moveTo(cx + dx * s, cy + dy * s)
+                  path.lineTo(cx - dx * s * 0.5f - dy * s * 0.8f, cy - dy * s * 0.5f + dx * s * 0.8f)
+                  path.lineTo(cx - dx * s * 0.5f + dy * s * 0.8f, cy - dy * s * 0.5f - dx * s * 0.8f)
+                  path.close()
+                  fill.color = Color.argb(if (on) 200 else 80, 255, 255, 255)
+                  c.drawPath(path, fill)
+              }
+
+              private fun drawLabel(c: Canvas, label: String, r: RectF) {
+                  txt.textSize = minOf(r.width(), r.height()) * (if (label.length > 2) 0.30f else 0.5f)
+                  val fm = txt.fontMetrics
+                  c.drawText(label, r.centerX(), r.centerY() - (fm.ascent + fm.descent) / 2f, txt)
+              }
+
+              private fun maskAt(x: Float, y: Float): Int {
+                  var m = 0
+                  val dx = x - dpCx
+                  val dy = y - dpCy
+                  val d2 = dx * dx + dy * dy
+                  if (d2 <= dpR * dpR * 1.2f && d2 >= dpR * dpR * 0.02f) {
+                      val ang = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble()))
+                      if (Math.abs(ang) < 67.5) m = m or (1 shl BTN_RIGHT)
+                      if (Math.abs(ang) > 112.5) m = m or (1 shl BTN_LEFT)
+                      if (ang > 22.5 && ang < 157.5) m = m or (1 shl BTN_DOWN)
+                      if (ang < -22.5 && ang > -157.5) m = m or (1 shl BTN_UP)
+                  }
+                  for (b in btns) {
+                      val pad = minOf(b.rect.width(), b.rect.height()) * 0.15f
+                      if (x >= b.rect.left - pad && x <= b.rect.right + pad &&
+                          y >= b.rect.top - pad && y <= b.rect.bottom + pad
+                      ) {
+                          m = m or (1 shl b.bit)
+                      }
+                  }
+                  return m
+              }
+
+              override fun onTouchEvent(e: MotionEvent): Boolean {
+                  val act = e.actionMasked
+                  var m = 0
+                  if (act != MotionEvent.ACTION_UP && act != MotionEvent.ACTION_CANCEL) {
+                      for (i in 0 until e.pointerCount) {
+                          if (act == MotionEvent.ACTION_POINTER_UP && i == e.actionIndex) continue
+                          m = m or maskAt(e.getX(i), e.getY(i))
+                      }
+                  }
+                  if (act == MotionEvent.ACTION_DOWN || act == MotionEvent.ACTION_POINTER_DOWN) {
+                      val i = e.actionIndex
+                      if (menuRect.contains(e.getX(i), e.getY(i))) onMenu()
+                  }
+                  if (m != mask) {
+                      mask = m
+                      onMask(m)
+                      invalidate()
+                  }
+                  return true
+              }
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/EmuThread.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/EmuThread.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          import android.content.Context
+          import android.media.AudioAttributes
+          import android.media.AudioFormat
+          import android.media.AudioTrack
+          import android.opengl.GLSurfaceView
+          import java.io.File
+
+          /**
+           * Thread emulator: memuat core + ROM, lalu menjalankan frame demi frame.
+           * Kecepatan diatur oleh AudioTrack (tulis blocking), dengan pembatas waktu cadangan.
+           */
+          class EmuThread(
+              private val ctx: Context,
+              private val rom: ByteArray,
+              private val romName: String,
+              private val glView: GLSurfaceView,
+              private val onError: (String) -> Unit
+          ) : Thread("emu-thread") {
+
+              @Volatile private var running = true
+              @Volatile var paused = false
+              @Volatile var fastForward = false
+
+              fun quit() {
+                  running = false
+              }
+
+              override fun run() {
+                  var track: AudioTrack? = null
+                  try {
+                      val base = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                      val sysDir = File(base, "system")
+                      sysDir.mkdirs()
+                      val saveDir = File(base, "saves")
+                      saveDir.mkdirs()
+                      val core = ctx.applicationInfo.nativeLibraryDir + "/libmgba_libretro_android.so"
+
+                      val e1 = Native.loadCore(core, sysDir.absolutePath, saveDir.absolutePath)
+                      if (e1 != null) {
+                          onError(e1)
+                          return
+                      }
+                      val e2 = Native.loadGame(rom, romName)
+                      if (e2 != null) {
+                          onError(e2)
+                          return
+                      }
+
+                      val av = Native.avInfo()
+                      val fps = if (av[0] > 1.0) av[0] else 59.7275
+                      val frameNs = (1_000_000_000.0 / fps).toLong()
+
+                      val sr = 48000
+                      val minBuf = AudioTrack.getMinBufferSize(
+                          sr, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT
+                      )
+                      val bufBytes = maxOf(minBuf, sr / 12 * 4)   // sekitar 80 ms
+                      val t = AudioTrack.Builder()
+                          .setAudioAttributes(
+                              AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_GAME)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                  .build()
+                          )
+                          .setAudioFormat(
+                              AudioFormat.Builder()
+                                  .setSampleRate(sr)
+                                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                  .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                  .build()
+                          )
+                          .setBufferSizeInBytes(bufBytes)
+                          .setTransferMode(AudioTrack.MODE_STREAM)
+                          .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                          .build()
+                      track = t
+                      t.play()
+
+                      val audio = ShortArray(8192)
+                      var last = System.nanoTime()
+                      var n = 0
+                      while (running) {
+                          if (paused) {
+                              t.pause()
+                              while (paused && running) {
+                                  Thread.sleep(30)
+                              }
+                              if (!running) break
+                              t.flush()
+                              t.play()
+                              last = System.nanoTime()
+                              continue
+                          }
+
+                          val ff = fastForward
+                          var i = if (ff) 4 else 1
+                          while (i > 0) {
+                              Native.runFrame()
+                              i--
+                          }
+                          val cnt = Native.drainAudio(audio)
+                          if (!ff && cnt > 0) t.write(audio, 0, cnt)
+                          glView.requestRender()
+
+                          n++
+                          if (n % 1800 == 0) Native.saveSram()   // sekitar tiap 30 detik
+
+                          if (!ff) {
+                              // Pembatas cadangan kalau audio tidak memblokir: maksimal sekitar 1,1x kecepatan asli.
+                              val spare = frameNs * 9 / 10 - (System.nanoTime() - last)
+                              if (spare > 0) Thread.sleep(spare / 1_000_000L, (spare % 1_000_000L).toInt())
+                          }
+                          last = System.nanoTime()
+                      }
+                  } catch (ex: Throwable) {
+                      onError("Emulator berhenti: " + (ex.message ?: ex.javaClass.simpleName))
+                  } finally {
+                      try {
+                          track?.stop()
+                      } catch (ignored: Exception) {
+                      }
+                      track?.release()
+                      Native.unload()   // menyimpan SRAM lalu membersihkan core
+                  }
+              }
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/java/id/gba/shaderplayer/MainActivity.kt
+        run: |
+          mkdir -p 'app/src/main/java/id/gba/shaderplayer'
+          cat > 'app/src/main/java/id/gba/shaderplayer/MainActivity.kt' <<'GBA_FILE_EOF'
+          package id.gba.shaderplayer
+
+          import android.app.Activity
+          import android.app.AlertDialog
+          import android.content.Intent
+          import android.content.SharedPreferences
+          import android.content.res.Configuration
+          import android.graphics.Color
+          import android.net.Uri
+          import android.opengl.GLSurfaceView
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.OpenableColumns
+          import android.view.Gravity
+          import android.view.InputDevice
+          import android.view.KeyEvent
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.ViewGroup
+          import android.view.WindowInsets
+          import android.view.WindowInsetsController
+          import android.view.WindowManager
+          import android.widget.FrameLayout
+          import android.widget.TextView
+          import android.widget.Toast
+          import java.util.zip.ZipInputStream
+          import kotlin.concurrent.thread
+
+          class MainActivity : Activity() {
+
+              companion object {
+                  private const val REQ_OPEN = 1001
+              }
+
+              private lateinit var prefs: SharedPreferences
+              private lateinit var glView: GLSurfaceView
+              private lateinit var renderer: GameRenderer
+              private lateinit var pad: GamepadView
+              private lateinit var hint: TextView
+
+              private var emu: EmuThread? = null
+              private var upscaleIdx = 0
+              private var lightIdx = 1
+              private var touchMask = 0
+              private var keyMask = 0
+              private var axisMask = 0
+              private var dialogs = 0
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+                  prefs = getSharedPreferences("gba", MODE_PRIVATE)
+                  upscaleIdx = prefs.getInt("upscale", 0).coerceIn(0, Opts.upscale.size - 1)
+                  lightIdx = prefs.getInt("light", 1).coerceIn(0, Opts.light.size - 1)
+
+                  renderer = GameRenderer(this) { msg -> toast(msg) }
+                  renderer.upscale = upscaleIdx
+                  renderer.light = lightIdx
+
+                  glView = GLSurfaceView(this)
+                  glView.setEGLContextClientVersion(3)
+                  glView.setRenderer(renderer)
+                  glView.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+
+                  pad = GamepadView(this)
+                  pad.onMask = { m ->
+                      touchMask = m
+                      pushMask()
+                  }
+                  pad.onMenu = { showMenu() }
+
+                  hint = TextView(this)
+                  hint.text = "Ketuk MENU lalu pilih \"Buka game…\"\n(file .gba atau .zip)"
+                  hint.setTextColor(Color.WHITE)
+                  hint.gravity = Gravity.CENTER
+                  hint.textSize = 16f
+
+                  val root = FrameLayout(this)
+                  root.setBackgroundColor(Color.BLACK)
+                  val mp = ViewGroup.LayoutParams.MATCH_PARENT
+                  root.addView(glView, FrameLayout.LayoutParams(mp, mp))
+                  root.addView(hint, FrameLayout.LayoutParams(mp, mp))
+                  root.addView(pad, FrameLayout.LayoutParams(mp, mp))
+                  setContentView(root)
+                  applyBars()
+
+                  // Buka lagi game terakhir kalau masih bisa diakses.
+                  val last = prefs.getString("lastRom", null)
+                  if (last != null) startGame(Uri.parse(last))
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  glView.onResume()
+                  if (dialogs == 0) emu?.paused = false
+                  applyBars()
+              }
+
+              override fun onPause() {
+                  emu?.paused = true
+                  Native.saveSram()
+                  glView.onPause()
+                  super.onPause()
+              }
+
+              override fun onDestroy() {
+                  stopEmu()
+                  super.onDestroy()
+              }
+
+              override fun onConfigurationChanged(newConfig: Configuration) {
+                  super.onConfigurationChanged(newConfig)
+                  applyBars()
+              }
+
+              override fun onWindowFocusChanged(hasFocus: Boolean) {
+                  super.onWindowFocusChanged(hasFocus)
+                  if (hasFocus) applyBars()
+              }
+
+              @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+              override fun onBackPressed() {
+                  showMenu()
+              }
+
+              // Lanskap: layar penuh tanpa bar sistem. Potret: bar sistem normal.
+              @Suppress("DEPRECATION")
+              private fun applyBars() {
+                  val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      val c = window.insetsController ?: return
+                      if (landscape) {
+                          c.hide(WindowInsets.Type.systemBars())
+                          c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                      } else {
+                          c.show(WindowInsets.Type.systemBars())
+                      }
+                  } else {
+                      window.decorView.systemUiVisibility = if (landscape) {
+                          View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                              View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      } else {
+                          View.SYSTEM_UI_FLAG_VISIBLE
+                      }
+                  }
+              }
+
+              // ---------------------------------------------------------------- input fisik
+
+              private fun pushMask() {
+                  Native.setButtons(touchMask or keyMask or axisMask)
+              }
+
+              private fun keyBit(k: Int): Int = when (k) {
+                  KeyEvent.KEYCODE_DPAD_UP -> GamepadView.BTN_UP
+                  KeyEvent.KEYCODE_DPAD_DOWN -> GamepadView.BTN_DOWN
+                  KeyEvent.KEYCODE_DPAD_LEFT -> GamepadView.BTN_LEFT
+                  KeyEvent.KEYCODE_DPAD_RIGHT -> GamepadView.BTN_RIGHT
+                  KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_Z -> GamepadView.BTN_B
+                  KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_X -> GamepadView.BTN_A
+                  KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_A -> GamepadView.BTN_L
+                  KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_S -> GamepadView.BTN_R
+                  KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_ENTER -> GamepadView.BTN_START
+                  KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_SHIFT_RIGHT -> GamepadView.BTN_SELECT
+                  else -> -1
+              }
+
+              override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+                  val bit = keyBit(e.keyCode)
+                  if (bit >= 0) {
+                      if (e.action == KeyEvent.ACTION_DOWN) {
+                          keyMask = keyMask or (1 shl bit)
+                      } else if (e.action == KeyEvent.ACTION_UP) {
+                          keyMask = keyMask and (1 shl bit).inv()
+                      }
+                      pushMask()
+                      return true
+                  }
+                  return super.dispatchKeyEvent(e)
+              }
+
+              override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+                  val fromStick = (ev.source and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                  if (fromStick && ev.action == MotionEvent.ACTION_MOVE) {
+                      val hx = ev.getAxisValue(MotionEvent.AXIS_HAT_X)
+                      val hy = ev.getAxisValue(MotionEvent.AXIS_HAT_Y)
+                      val x = if (Math.abs(hx) > 0.5f) hx else ev.getAxisValue(MotionEvent.AXIS_X)
+                      val y = if (Math.abs(hy) > 0.5f) hy else ev.getAxisValue(MotionEvent.AXIS_Y)
+                      var m = 0
+                      if (x < -0.5f) m = m or (1 shl GamepadView.BTN_LEFT)
+                      if (x > 0.5f) m = m or (1 shl GamepadView.BTN_RIGHT)
+                      if (y < -0.5f) m = m or (1 shl GamepadView.BTN_UP)
+                      if (y > 0.5f) m = m or (1 shl GamepadView.BTN_DOWN)
+                      axisMask = m
+                      pushMask()
+                      return true
+                  }
+                  return super.dispatchGenericMotionEvent(ev)
+              }
+
+              // ---------------------------------------------------------------- menu
+
+              private fun showMenu() {
+                  if (dialogs > 0) return
+                  keyMask = 0
+                  axisMask = 0
+                  pushMask()
+                  val e = emu
+                  val ff = e != null && e.fastForward
+                  val items = arrayOf(
+                      "Buka game…",
+                      "Upscale: " + Opts.upscale[upscaleIdx],
+                      "Cahaya: " + Opts.light[lightIdx],
+                      "Maju cepat: " + (if (ff) "Hidup" else "Mati"),
+                      "Simpan state",
+                      "Muat state",
+                      "Reset game",
+                      "Keluar"
+                  )
+                  dialogs++
+                  emu?.paused = true
+                  AlertDialog.Builder(this)
+                      .setTitle("GBA Shader Player")
+                      .setItems(items) { _, which ->
+                          when (which) {
+                              0 -> openPicker()
+                              1 -> choose("Upscale", Opts.upscale, upscaleIdx) { idx -> setUpscale(idx) }
+                              2 -> choose("Cahaya", Opts.light, lightIdx) { idx -> setLight(idx) }
+                              3 -> emu?.let { it.fastForward = !it.fastForward }
+                              4 -> toast(if (Native.saveState()) "State tersimpan" else "Gagal menyimpan state")
+                              5 -> toast(if (Native.loadState()) "State dimuat" else "State belum ada / gagal dimuat")
+                              6 -> Native.reset()
+                              7 -> finish()
+                              else -> {}
+                          }
+                      }
+                      .setOnDismissListener { closeDialog() }
+                      .show()
+              }
+
+              private fun choose(title: String, names: Array<String>, cur: Int, onPick: (Int) -> Unit) {
+                  dialogs++
+                  emu?.paused = true
+                  AlertDialog.Builder(this)
+                      .setTitle(title)
+                      .setSingleChoiceItems(names, cur) { d, which ->
+                          onPick(which)
+                          d.dismiss()
+                      }
+                      .setOnDismissListener { closeDialog() }
+                      .show()
+              }
+
+              private fun closeDialog() {
+                  dialogs--
+                  if (dialogs <= 0) {
+                      dialogs = 0
+                      emu?.paused = false
+                  }
+              }
+
+              private fun setUpscale(idx: Int) {
+                  upscaleIdx = idx
+                  renderer.upscale = idx
+                  prefs.edit().putInt("upscale", idx).apply()
+                  glView.requestRender()
+              }
+
+              private fun setLight(idx: Int) {
+                  lightIdx = idx
+                  renderer.light = idx
+                  prefs.edit().putInt("light", idx).apply()
+                  glView.requestRender()
+              }
+
+              // ---------------------------------------------------------------- buka game
+
+              private fun openPicker() {
+                  val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                  i.addCategory(Intent.CATEGORY_OPENABLE)
+                  i.type = "*/*"
+                  i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                  startActivityForResult(i, REQ_OPEN)
+              }
+
+              @Suppress("DEPRECATION")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == REQ_OPEN && resultCode == RESULT_OK) {
+                      val uri = data?.data ?: return
+                      try {
+                          contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      } catch (ignored: Exception) {
+                      }
+                      prefs.edit().putString("lastRom", uri.toString()).apply()
+                      startGame(uri)
+                  }
+              }
+
+              private fun startGame(uri: Uri) {
+                  thread(name = "rom-loader") {
+                      try {
+                          val name = displayName(uri)
+                          val stream = contentResolver.openInputStream(uri)
+                              ?: throw RuntimeException("Tidak bisa membuka file")
+                          var bytes = stream.use { it.readBytes() }
+                          var romName = name
+                          val isZip = bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+                          if (isZip || name.endsWith(".zip", ignoreCase = true)) {
+                              val z = unzipRom(bytes)
+                                  ?: throw RuntimeException("ZIP tidak berisi file .gba/.gb/.gbc")
+                              romName = z.first
+                              bytes = z.second
+                          }
+                          val finalBytes = bytes
+                          val finalName = romName
+                          runOnUiThread { launchEmu(finalBytes, finalName) }
+                      } catch (t: Throwable) {
+                          toast("Gagal membuka game: " + (t.message ?: t.javaClass.simpleName))
+                      }
+                  }
+              }
+
+              private fun displayName(uri: Uri): String {
+                  var name: String? = null
+                  try {
+                      val c = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                      if (c != null) {
+                          if (c.moveToFirst()) name = c.getString(0)
+                          c.close()
+                      }
+                  } catch (ignored: Exception) {
+                  }
+                  return name ?: (uri.lastPathSegment ?: "game.gba")
+              }
+
+              private fun unzipRom(zip: ByteArray): Pair<String, ByteArray>? {
+                  val z = ZipInputStream(zip.inputStream())
+                  try {
+                      var e = z.nextEntry
+                      while (e != null) {
+                          val n = e.name.lowercase()
+                          if (!e.isDirectory && (n.endsWith(".gba") || n.endsWith(".gbc") || n.endsWith(".gb") || n.endsWith(".agb"))) {
+                              return Pair(e.name.substringAfterLast('/'), z.readBytes())
+                          }
+                          e = z.nextEntry
+                      }
+                  } finally {
+                      z.close()
+                  }
+                  return null
+              }
+
+              private fun launchEmu(rom: ByteArray, name: String) {
+                  stopEmu()
+                  hint.visibility = View.GONE
+                  val t = EmuThread(this, rom, name, glView) { msg -> toast(msg) }
+                  emu = t
+                  t.start()
+              }
+
+              private fun stopEmu() {
+                  val t = emu ?: return
+                  t.quit()
+                  try {
+                      t.join(3000)
+                  } catch (ignored: InterruptedException) {
+                  }
+                  emu = null
+              }
+
+              private fun toast(msg: String) {
+                  runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+              }
+          }
+          GBA_FILE_EOF
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Pasang SDK, NDK, CMake
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+
+      - name: Unduh core mGBA (libretro, arm64)
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a core_tmp
+          curl -fL --retry 3 --retry-delay 5 -o core_tmp/core.zip \
+            https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/mgba_libretro_android.so.zip
+          unzip -o core_tmp/core.zip -d core_tmp
+          SO=$(ls core_tmp/*.so | head -n 1)
+          cp "$SO" app/src/main/jniLibs/arm64-v8a/libmgba_libretro_android.so
+          ls -l app/src/main/jniLibs/arm64-v8a
+          file app/src/main/jniLibs/arm64-v8a/libmgba_libretro_android.so || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build APK (debug)
+        run: gradle :app:assembleDebug --no-daemon --console=plain
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GBAShaderPlayer-APK
+          path: app/build/outputs/apk/debug/*.apk
