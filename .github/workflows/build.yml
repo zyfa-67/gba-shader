@@ -85,6 +85,16 @@ jobs:
                   }
               }
 
+              // Kunci debug tetap (ikut di repo) supaya versi baru bisa menimpa versi lama tanpa uninstall.
+              signingConfigs {
+                  getByName("debug") {
+                      storeFile = file("debug.keystore")
+                      storePassword = "android"
+                      keyAlias = "androiddebugkey"
+                      keyPassword = "android"
+                  }
+              }
+
               externalNativeBuild {
                   cmake {
                       path = file("src/main/cpp/CMakeLists.txt")
@@ -107,6 +117,57 @@ jobs:
                   jvmTarget = "17"
               }
           }
+          GBA_FILE_EOF
+
+      - name: Tulis app/debug.keystore
+        run: |
+          mkdir -p 'app'
+          base64 -d > 'app/debug.keystore' <<'GBA_FILE_EOF'
+          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
+          GitGvY/NmnUCAwGGoA==
           GBA_FILE_EOF
 
       - name: Tulis app/src/main/AndroidManifest.xml
@@ -797,47 +858,151 @@ jobs:
           }
           GBA_FILE_EOF
 
+      - name: Tulis app/src/main/assets/shaders/smooth.frag
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/smooth.frag' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Pass "Realistis": haluskan hasil Scale4x dengan filter bilateral (tepi dipertahankan),
+          // lalu pertajam sedikit supaya tidak terlihat buram.
+          precision highp float;
+          precision highp int;
+          uniform highp sampler2D uTex;   // hasil EPX 4x
+          uniform float uSigmaS;          // lebar spasial (dalam piksel 4x)
+          uniform float uSigmaR;          // toleransi beda warna
+          uniform float uSharpen;         // kekuatan unsharp mask
+          in vec2 vUV;
+          out vec4 outColor;
+
+          void main() {
+              ivec2 sz = textureSize(uTex, 0);
+              ivec2 o = ivec2(gl_FragCoord.xy);
+              vec3 c0 = texelFetch(uTex, o, 0).rgb;
+              float is2 = 1.0 / (2.0 * uSigmaS * uSigmaS);
+              float ir2 = 1.0 / (2.0 * uSigmaR * uSigmaR);
+              vec3 sum = vec3(0.0);
+              float wsum = 0.0;
+              vec3 blur = vec3(0.0);
+              float bsum = 0.0;
+              for (int y = -4; y <= 4; y++) {
+                  for (int x = -4; x <= 4; x++) {
+                      vec3 c = texelFetch(uTex, clamp(o + ivec2(x, y), ivec2(0), sz - ivec2(1)), 0).rgb;
+                      vec3 d = c - c0;
+                      float r2 = float(x * x + y * y);
+                      float w = exp(-r2 * is2 - dot(d, d) * ir2);
+                      sum += c * w;
+                      wsum += w;
+                      float wb = exp(-r2 * is2);
+                      blur += c * wb;
+                      bsum += wb;
+                  }
+              }
+              vec3 sm = sum / wsum;
+              vec3 bl = blur / bsum;
+              vec3 res = sm + uSharpen * (sm - bl);
+              outColor = vec4(clamp(res, 0.0, 1.0), 1.0);
+          }
+          GBA_FILE_EOF
+
+      - name: Tulis app/src/main/assets/shaders/rays.frag
+        run: |
+          mkdir -p 'app/src/main/assets/shaders'
+          cat > 'app/src/main/assets/shaders/rays.frag' <<'GBA_FILE_EOF'
+          #version 300 es
+          // Sinar matahari (god rays): radial blur dari posisi matahari, hanya bagian terang yang ikut menyala.
+          // Dijalankan di resolusi rendah, hasilnya dibaca pass akhir.
+          precision highp float;
+          precision highp int;
+          uniform highp sampler2D uImg;   // gambar dasar (pakai mipmap)
+          uniform vec2  uBaseSize;
+          uniform vec2  uSunUV;           // posisi matahari di koordinat gambar (boleh di luar 0..1)
+          uniform float uRayThr;          // ambang kecerahan yang dianggap menyala
+          uniform float uRayDecay;        // peluruhan tiap langkah (0.90 - 0.98)
+          uniform float uRayDensity;      // panjang sinar menuju matahari (0..1)
+          in vec2 vUV;
+          out vec4 outColor;
+
+          const int N = 56;
+
+          void main() {
+              float lod0 = log2(float(textureSize(uImg, 0).x) / uBaseSize.x);
+              float avg = dot(textureLod(uImg, vec2(0.5), 20.0).rgb, vec3(0.2126, 0.7152, 0.0722));
+              float thr = max(uRayThr, avg + 0.10);
+              vec2 delta = (uSunUV - vUV) * (uRayDensity / float(N));
+              float jit = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+              vec2 p = vUV + delta * jit;
+              vec3 acc = vec3(0.0);
+              float w = 1.0;
+              for (int i = 0; i < N; i++) {
+                  p += delta;
+                  vec2 inside = step(vec2(0.0), p) * step(p, vec2(1.0));
+                  vec3 s = textureLod(uImg, clamp(p, 0.0, 1.0), lod0 + 0.7).rgb;
+                  acc += max(s - vec3(thr), vec3(0.0)) * (w * inside.x * inside.y);
+                  w *= uRayDecay;
+              }
+              outColor = vec4(acc * (4.0 / float(N)), 1.0);
+          }
+          GBA_FILE_EOF
+
       - name: Tulis app/src/main/assets/shaders/final.frag
         run: |
           mkdir -p 'app/src/main/assets/shaders'
           cat > 'app/src/main/assets/shaders/final.frag' <<'GBA_FILE_EOF'
           #version 300 es
-          // Pass akhir: sampling tajam/halus + warna layar GBA + grid LCD + glow (cahaya) + vignette.
-          // Semua nilai diatur dari GameRenderer.kt (preset "Cahaya"); ubah di sini kalau mau rumus lain.
+          // Pass akhir. Menggabungkan: sampling (tajam/halus), warna LCD GBA, kisi LCD, lalu gaya "shader pack":
+          // cahaya matahari + relief + bayangan lembut + AO + bloom + sinar matahari + bayangan awan + tonemap.
+          // Semua angka diatur dari preset "Cahaya" di GameRenderer.kt.
           precision highp float;
           precision highp int;
-          uniform highp sampler2D uSrc;
-          uniform vec2  uBaseSize;   // ukuran asli frame (mis. 240x160)
-          uniform float uSharp;      // 1 = sharp bilinear anti-alias, 0 = sampling biasa
-          uniform float uColor;      // 0..1  campuran koreksi warna LCD GBA
-          uniform float uGrid;       // 0..1  kekuatan garis kisi antar piksel
-          uniform float uGlow;       // 0..2  kekuatan glow dari area terang
-          uniform float uVignette;   // 0..1  gelap di tepi layar
-          uniform float uBright;     // pengali kecerahan untuk warna terkoreksi
-          uniform vec3  uTint;       // nada warna (hangat = merah naik, biru turun)
+          uniform highp sampler2D uImg;    // gambar dasar (mipmap aktif)
+          uniform highp sampler2D uRays;   // hasil rays.frag
+          uniform vec2  uBaseSize;         // ukuran asli frame (mis. 240x160)
+          uniform float uSharp;            // 1 = sharp bilinear anti-alias
+          uniform float uTime;             // detik, untuk animasi awan
+
+          uniform float uColor;            // campuran koreksi warna LCD GBA (0..1)
+          uniform float uGrid;             // kisi antar piksel (0..1)
+          uniform float uVignette;         // gelap di tepi layar
+          uniform float uBright;           // kecerahan koreksi LCD
+          uniform vec3  uTint;             // nada warna akhir
+
+          uniform vec3  uAmbient;          // cahaya langit/ambient
+          uniform vec3  uSunCol;           // warna matahari
+          uniform vec3  uSunDir;           // arah ke matahari (x kanan, y bawah, z ke penonton), ternormalisasi
+          uniform float uRelief;           // kekuatan relief (bump dari kecerahan)
+          uniform float uSpec;             // kilau
+          uniform float uShadow;           // bayangan lembut
+          uniform float uShadowLen;        // panjang bayangan (1 = normal)
+          uniform float uAO;               // ambient occlusion
+          uniform float uBloom;            // glow
+          uniform float uBloomThr;         // ambang glow
+          uniform float uRay;              // sinar matahari (dari area terang)
+          uniform float uBeam;             // berkas cahaya matahari bergerak (volumetrik palsu)
+          uniform vec2  uSunUV;            // posisi matahari di koordinat gambar
+          uniform float uCloud;            // bayangan awan bergerak
+          uniform float uEmissive;         // area terang menyala sendiri (malam)
+          uniform float uTone;             // 1 = tonemap filmik
+          uniform float uExposure;
+          uniform float uSat;
+          uniform float uContrast;
+
           in vec2 vUV;
           out vec4 outColor;
 
-          const vec2 K[8] = vec2[8](
-              vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
-              vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707)
-          );
+          const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+          float luma(vec3 c) { return dot(c, LUMA); }
 
           vec3 fetchColor(vec2 uv, vec2 fw) {
               if (uSharp > 0.5) {
                   vec2 p = uv * uBaseSize;
                   vec2 seam = floor(p + 0.5);
                   p = seam + clamp((p - seam) / fw, -0.5, 0.5);
-                  return texture(uSrc, p / uBaseSize).rgb;
+                  return texture(uImg, p / uBaseSize).rgb;
               }
-              return texture(uSrc, uv).rgb;
+              return texture(uImg, uv).rgb;
           }
 
-          vec3 brightPass(vec3 c) {
-              return max(c - vec3(0.55), vec3(0.0));
-          }
-
-          // Meniru layar GBA: gamma LCD tinggi, warna saling bercampur sedikit.
           vec3 lcdColor(vec3 c) {
               vec3 lin = pow(c, vec3(3.2));
               vec3 m = vec3(dot(lin, vec3(0.86, 0.10, 0.04)),
@@ -846,36 +1011,149 @@ jobs:
               return pow(m, vec3(1.0 / 2.2));
           }
 
-          void main() {
-              vec2 p = vUV * uBaseSize;
-              vec2 fw = max(fwidth(p), vec2(0.0001));
-              vec3 c = fetchColor(vUV, fw);
+          float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
-              // Glow: ambil bagian terang di sekitar, rata-ratakan, tambahkan kembali.
-              vec3 glow = vec3(0.0);
-              if (uGlow > 0.0) {
-                  for (int i = 0; i < 8; i++) {
-                      vec2 d = K[i] / uBaseSize;
-                      glow += brightPass(fetchColor(vUV + d * 1.5, fw));
-                      glow += brightPass(fetchColor(vUV + d * 3.5, fw));
-                  }
-                  glow /= 16.0;
+          float vnoise(vec2 p) {
+              vec2 i = floor(p);
+              vec2 f = fract(p);
+              f = f * f * (3.0 - 2.0 * f);
+              return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                         mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+          }
+
+          float fbm(vec2 p) {
+              float a = 0.5;
+              float s = 0.0;
+              for (int i = 0; i < 4; i++) {
+                  s += a * vnoise(p);
+                  p = p * 2.03 + vec2(17.0, 9.0);
+                  a *= 0.5;
+              }
+              return s;
+          }
+
+          vec3 filmic(vec3 x) {
+              return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+          }
+
+          void main() {
+              vec2 uv = vUV;
+              vec2 p = uv * uBaseSize;
+              vec2 fw = max(fwidth(p), vec2(0.0001));
+              vec2 px = 1.0 / uBaseSize;                                   // 1 piksel sumber dalam uv
+              float lod0 = log2(float(textureSize(uImg, 0).x) / uBaseSize.x); // mip yang setara 1 piksel sumber
+
+              vec3 c = fetchColor(uv, fw);
+              float Y = luma(c);
+
+              // 1) koreksi warna layar LCD GBA (opsional)
+              vec3 base = mix(c, lcdColor(c) * uBright, uColor);
+              vec3 lin = pow(base, vec3(2.2));
+
+              // 2) rata-rata lokal (untuk AO dan bayangan)
+              float Ym = luma(textureLod(uImg, uv, lod0 + 1.6).rgb);
+
+              float ao = 1.0;
+              if (uAO > 0.0) {
+                  ao = 1.0 - uAO * clamp((Ym - Y) * 3.0, 0.0, 1.0);
               }
 
-              vec3 corrected = lcdColor(c) * uBright;
-              vec3 col = mix(c, corrected, uColor);
+              // 3) relief: normal dari gradien kecerahan yang sudah dihaluskan, diterangi arah matahari
+              float relief = 1.0;
+              float spec = 0.0;
+              if (uRelief > 0.0 || uSpec > 0.0) {
+                  vec2 d = px * 1.4;
+                  float lr = lod0 + 0.9;
+                  float gx = luma(textureLod(uImg, uv + vec2(d.x, 0.0), lr).rgb) - luma(textureLod(uImg, uv - vec2(d.x, 0.0), lr).rgb);
+                  float gy = luma(textureLod(uImg, uv + vec2(0.0, d.y), lr).rgb) - luma(textureLod(uImg, uv - vec2(0.0, d.y), lr).rgb);
+                  vec3 n = normalize(vec3(-gx * 2.2, -gy * 2.2, 1.0));
+                  float diff = dot(n, uSunDir) / uSunDir.z;
+                  relief = mix(1.0, clamp(diff, 0.5, 1.5), uRelief);
+                  vec3 h = normalize(uSunDir + vec3(0.0, 0.0, 1.0));
+                  spec = pow(max(dot(n, h), 0.0), 40.0) * uSpec;
+              }
 
-              // Kisi LCD: gelap tipis di batas antar piksel sumber.
+              // 4) bayangan lembut: ada yang sangat gelap (outline/tinggi) di arah matahari => kita terlindung
+              float shade = 1.0;
+              if (uShadow > 0.0) {
+                  vec2 ld = normalize(uSunDir.xy) * px * uShadowLen * 0.75;
+                  float jit = hash(gl_FragCoord.xy);
+                  float sh = 0.0;
+                  for (int i = 0; i < 12; i++) {
+                      float fi = float(i) + jit + 1.0;
+                      float ys = luma(textureLod(uImg, uv + ld * fi, lod0 + 0.5).rgb);
+                      sh = max(sh, smoothstep(0.16, 0.42, Ym - ys) * (1.0 - fi / 13.5));
+                  }
+                  shade = 1.0 - uShadow * sh;
+              }
+
+              // 5) bayangan awan
+              float cloud = 0.0;
+              if (uCloud > 0.0) {
+                  vec2 cp = vec2(uv.x * (uBaseSize.x / uBaseSize.y), uv.y) * 1.4 + vec2(uTime * 0.015, uTime * 0.007);
+                  cloud = smoothstep(0.38, 0.66, fbm(cp)) * uCloud;
+              }
+
+              // 6) gabungkan cahaya
+              vec3 sun = uSunCol * shade * (1.0 - 0.8 * cloud);
+              vec3 lit = lin * (uAmbient + sun) * relief * ao;
+              lit += uSunCol * spec * shade;
+              if (uEmissive > 0.0) {
+                  float avgY = luma(textureLod(uImg, vec2(0.5), 20.0).rgb);
+                  lit += lin * uEmissive * smoothstep(avgY + 0.06, avgY + 0.22, Y);
+              }
+
+              // 7) bloom dari mipmap (beberapa tingkat blur); ambang lunak menyesuaikan rata-rata kecerahan layar
+              if (uBloom > 0.0) {
+                  float avg = luma(textureLod(uImg, vec2(0.5), 20.0).rgb);
+                  float thr = max(uBloomThr, avg + 0.10);
+                  vec3 b = vec3(0.0);
+                  float wsum = 0.0;
+                  for (int i = 0; i < 6; i++) {
+                      float l = lod0 + 0.5 + float(i) * 0.85;
+                      vec3 s = textureLod(uImg, uv, l).rgb;
+                      float k = smoothstep(thr - 0.12, thr + 0.12, luma(s));
+                      float w = 1.0 + float(i) * 0.35;
+                      b += s * k * w;
+                      wsum += w;
+                  }
+                  lit += pow(b / wsum, vec3(2.2)) * uBloom * 3.0;
+              }
+
+              // 8) sinar matahari: dari area terang (rays.frag) + berkas bergerak
+              if (uRay > 0.0) {
+                  vec3 r = texture(uRays, uv).rgb;
+                  lit += pow(r, vec3(2.2)) * uSunCol * uRay * 3.0 * (1.0 - 0.6 * cloud);
+              }
+              if (uBeam > 0.0) {
+                  vec2 dv = (uv - uSunUV) * vec2(uBaseSize.x / uBaseSize.y, 1.0);
+                  float dist = length(dv);
+                  float ang = atan(dv.y, dv.x);
+                  float n1 = vnoise(vec2(ang * 6.0, uTime * 0.05));
+                  float n2 = vnoise(vec2(ang * 15.0 + 3.0, uTime * 0.08 + 7.0));
+                  float shafts = smoothstep(0.38, 0.80, n1 * 0.65 + n2 * 0.35);
+                  float beam = shafts * exp(-dist * 0.75) * (1.0 - 0.7 * cloud);
+                  lit += (lin * 1.1 + vec3(0.06)) * uSunCol * beam * uBeam;
+              }
+
+              // 9) tonemap + grading
+              lit *= uExposure;
+              if (uTone > 0.5) lit = filmic(lit);
+              vec3 col = pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2));
+              float lc = luma(col);
+              col = mix(vec3(lc), col, uSat);
+              col = (col - 0.5) * uContrast + 0.5;
+
+              // 10) kisi LCD dan vignette
               vec2 f = fract(p);
               vec2 g = smoothstep(vec2(0.0), vec2(0.20), f) * (1.0 - smoothstep(vec2(0.80), vec2(1.0), f));
               col *= mix(1.0, g.x * g.y, uGrid);
-
-              // Vignette lembut.
-              vec2 q = vUV - 0.5;
+              vec2 q = uv - 0.5;
               col *= 1.0 - uVignette * dot(q, q) * 1.8;
-
-              col += glow * uGlow;
               col *= uTint;
+
+              // dithering halus supaya gradasi tidak berpita
+              col += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
               outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
           }
           GBA_FILE_EOF
@@ -924,8 +1202,21 @@ jobs:
 
           /** Nama pilihan di menu. Urutan harus sama dengan logika di GameRenderer. */
           object Opts {
-              val upscale = arrayOf("Tajam (anti-alias)", "Scale4x (EPX)", "Halus (bilinear)", "Piksel (nearest)")
-              val light = arrayOf("Mati", "GBA LCD", "Glow hangat", "Terang (SP)")
+              val upscale = arrayOf(
+                  "Realistis (HD halus)",
+                  "Tajam (anti-alias)",
+                  "Scale4x (EPX)",
+                  "Halus (bilinear)",
+                  "Piksel (nearest)"
+              )
+              val light = arrayOf(
+                  "Mati",
+                  "GBA LCD",
+                  "Shader Siang",
+                  "Shader Senja",
+                  "Shader Malam",
+                  "Shader Awan"
+              )
           }
           GBA_FILE_EOF
 
@@ -938,14 +1229,27 @@ jobs:
           import android.content.Context
           import android.opengl.GLES30
           import android.opengl.GLSurfaceView
+          import android.os.SystemClock
           import java.nio.ByteBuffer
           import java.nio.ByteOrder
           import javax.microedition.khronos.egl.EGLConfig
           import javax.microedition.khronos.opengles.GL10
 
+          private fun v2(a: Float, b: Float): FloatArray = floatArrayOf(a, b)
+
+          private fun v3(a: Float, b: Float, c: Float): FloatArray = floatArrayOf(a, b, c)
+
           /**
            * Renderer OpenGL ES 3.0.
-           * Alur: frame core -> (opsional) Scale4x/EPX 2 pass -> pass akhir (warna LCD, kisi, glow, vignette) -> layar.
+           *
+           * Alur tiap frame:
+           *  1. Upscale: Realistis = EPX 2x -> EPX 2x -> filter bilateral (smooth.frag)
+           *              Scale4x   = EPX 2x -> EPX 2x
+           *              lainnya   = frame asli (tajam / bilinear / nearest)
+           *  2. Mipmap dari gambar hasil upscale (dipakai untuk bloom, AO, bayangan).
+           *  3. rays.frag: sinar matahari (resolusi rendah).
+           *  4. final.frag: cahaya gaya shader pack (matahari, relief, bayangan, AO, bloom, sinar, awan, tonemap).
+           *
            * Semua shader ada di assets/shaders/ dan bisa diedit. Kalau shader gagal kompilasi, muncul toast berisi
            * log error dan aplikasi memakai tampilan cadangan (bukan layar hitam).
            */
@@ -954,27 +1258,65 @@ jobs:
               private val onError: (String) -> Unit
           ) : GLSurfaceView.Renderer {
 
-              /** Indeks Opts.upscale: 0 tajam, 1 Scale4x, 2 bilinear, 3 nearest. */
+              /** Indeks Opts.upscale: 0 realistis, 1 tajam, 2 Scale4x, 3 bilinear, 4 nearest. */
               @Volatile var upscale = 0
 
               /** Indeks Opts.light -> baris di presets. */
-              @Volatile var light = 1
+              @Volatile var light = 2
 
-              private class Light(
-                  val color: Float, val grid: Float, val glow: Float, val vig: Float,
-                  val bright: Float, val tr: Float, val tg: Float, val tb: Float
+              private class Look(
+                  val color: Float = 0f,          // campuran koreksi warna LCD GBA
+                  val grid: Float = 0f,           // kisi LCD
+                  val vig: Float = 0f,            // vignette
+                  val bright: Float = 1f,         // kecerahan koreksi LCD
+                  val tint: FloatArray = v3(1f, 1f, 1f),
+                  val ambient: FloatArray = v3(1f, 1f, 1f),   // cahaya langit
+                  val sunCol: FloatArray = v3(0f, 0f, 0f),    // warna matahari
+                  val sunDir: FloatArray = v3(-0.55f, -0.6f, 0.6f),  // arah ke matahari (x kanan, y bawah, z ke penonton)
+                  val relief: Float = 0f,         // relief dari kecerahan
+                  val spec: Float = 0f,           // kilau
+                  val shadow: Float = 0f,         // bayangan lembut
+                  val shadowLen: Float = 1f,      // panjang bayangan
+                  val ao: Float = 0f,             // ambient occlusion
+                  val bloom: Float = 0f,          // glow
+                  val bloomThr: Float = 0.6f,     // ambang glow
+                  val ray: Float = 0f,            // sinar dari area terang
+                  val rayThr: Float = 0.6f,
+                  val beam: Float = 0f,           // berkas cahaya bergerak
+                  val sunUV: FloatArray = v2(-0.25f, -0.30f), // posisi matahari di layar (boleh di luar 0..1)
+                  val cloud: Float = 0f,          // bayangan awan bergerak
+                  val emissive: Float = 0f,       // area terang menyala sendiri (malam)
+                  val tone: Float = 0f,           // 1 = tonemap filmik
+                  val exposure: Float = 1f,
+                  val sat: Float = 1f,
+                  val contrast: Float = 1f
               )
 
-              // color, grid, glow, vignette, kecerahan, tint R, G, B
+              // Urutan harus sama dengan Opts.light.
               private val presets = arrayOf(
-                  Light(0f, 0f, 0f, 0f, 1f, 1f, 1f, 1f),                       // Mati
-                  Light(1f, 0.55f, 0.15f, 0.10f, 1.25f, 1f, 1f, 1f),           // GBA LCD
-                  Light(0.6f, 0.15f, 0.9f, 0.30f, 1.05f, 1.04f, 1f, 0.92f),    // Glow hangat
-                  Light(0.5f, 0f, 0.25f, 0f, 1.15f, 1f, 1f, 1f)                // Terang (SP)
+                  // Mati
+                  Look(ambient = v3(1f, 1f, 1f), sunCol = v3(0f, 0f, 0f), sunDir = v3(-0.5439f, -0.5934f, 0.5934f), tone = 0f, exposure = 1f, sat = 1f, contrast = 1f),
+                  // GBA LCD
+                  Look(color = 1f, grid = 0.55f, vig = 0.1f, bright = 1.25f, ambient = v3(1f, 1f, 1f), sunCol = v3(0f, 0f, 0f), sunDir = v3(-0.5439f, -0.5934f, 0.5934f), bloom = 0.12f, bloomThr = 0.65f, tone = 0f, exposure = 1f, sat = 1f, contrast = 1f),
+                  // Shader Siang
+                  Look(vig = 0.25f, ambient = v3(0.3f, 0.36f, 0.48f), sunCol = v3(0.82f, 0.66f, 0.46f), sunDir = v3(-0.5439f, -0.5934f, 0.5934f), relief = 0.6f, spec = 0.2f, shadow = 0.7f, ao = 0.7f, bloom = 0.9f, ray = 0.7f, beam = 0.8f, tone = 1f, exposure = 0.95f, sat = 1.18f, contrast = 1.1f),
+                  // Shader Senja
+                  Look(vig = 0.4f, ambient = v3(0.26f, 0.22f, 0.4f), sunCol = v3(1.05f, 0.58f, 0.26f), sunDir = v3(-0.8409f, -0.2628f, 0.473f), relief = 0.7f, spec = 0.3f, shadow = 0.75f, shadowLen = 2f, ao = 0.7f, bloom = 1.2f, bloomThr = 0.55f, ray = 1f, rayThr = 0.55f, beam = 1f, sunUV = v2(-0.35f, 0.15f), tone = 1f, exposure = 0.95f, sat = 1.25f, contrast = 1.12f),
+                  // Shader Malam
+                  Look(vig = 0.5f, ambient = v3(0.09f, 0.13f, 0.28f), sunCol = v3(0.14f, 0.22f, 0.44f), sunDir = v3(0.4216f, -0.527f, 0.7379f), relief = 0.5f, spec = 0.2f, shadow = 0.5f, ao = 0.8f, bloom = 1.5f, bloomThr = 0.5f, ray = 0.4f, rayThr = 0.5f, beam = 0.35f, sunUV = v2(1.15f, -0.25f), emissive = 0.9f, tone = 1f, exposure = 0.9f, sat = 0.95f, contrast = 1.15f),
+                  // Shader Awan
+                  Look(vig = 0.25f, ambient = v3(0.3f, 0.36f, 0.48f), sunCol = v3(0.82f, 0.66f, 0.46f), sunDir = v3(-0.5439f, -0.5934f, 0.5934f), relief = 0.6f, spec = 0.2f, shadow = 0.7f, ao = 0.7f, bloom = 0.9f, ray = 0.7f, beam = 0.8f, cloud = 0.8f, tone = 1f, exposure = 0.95f, sat = 1.18f, contrast = 1.1f)
               )
+
+              // Parameter filter bilateral untuk mode "Realistis".
+              private val sigmaS = 3.5f
+              private val sigmaR = 0.25f
+              private val sharpen = 0.8f
 
               private val frameBuf: ByteBuffer =
                   ByteBuffer.allocateDirect(512 * 512 * 4).order(ByteOrder.nativeOrder())
+
+              private val startMs = SystemClock.elapsedRealtime()
 
               private var surfW = 1
               private var surfH = 1
@@ -984,11 +1326,19 @@ jobs:
               private var fboOk = true
 
               private var texSrc = 0
-              private val texUp = IntArray(2)
-              private val fbo = IntArray(2)
+              private var tex2 = 0
+              private var tex4 = 0
+              private var texS = 0
+              private var texR = 0
+              private var fbo2 = 0
+              private var fbo4 = 0
+              private var fboS = 0
+              private var fboR = 0
 
               private var progPlain = 0
               private var progEpx = 0
+              private var progSmooth = 0
+              private var progRays = 0
               private var progFinal = 0
 
               override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -997,10 +1347,14 @@ jobs:
                   hasFrame = false
                   fboOk = true
                   texSrc = 0
-                  texUp[0] = 0
-                  texUp[1] = 0
-                  fbo[0] = 0
-                  fbo[1] = 0
+                  tex2 = 0
+                  tex4 = 0
+                  texS = 0
+                  texR = 0
+                  fbo2 = 0
+                  fbo4 = 0
+                  fboS = 0
+                  fboR = 0
 
                   val vao = IntArray(1)
                   GLES30.glGenVertexArrays(1, vao, 0)
@@ -1008,6 +1362,8 @@ jobs:
 
                   progPlain = buildProgram("plain.frag")
                   progEpx = buildProgram("epx.frag")
+                  progSmooth = buildProgram("smooth.frag")
+                  progRays = buildProgram("rays.frag")
                   progFinal = buildProgram("final.frag")
               }
 
@@ -1037,23 +1393,32 @@ jobs:
                   GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
                   if (!hasFrame || srcW == 0 || srcH == 0) return
 
-                  val prog = if (progFinal != 0) progFinal else progPlain
+                  val full = progFinal != 0
+                  val prog = if (full) progFinal else progPlain
                   if (prog == 0) return
+                  val look = presets[light.coerceIn(0, presets.size - 1)]
 
-                  val mode = upscale
-
-                  // Filter tekstur sumber: nearest hanya untuk mode "Piksel".
-                  val filt = if (mode == 3) GLES30.GL_NEAREST else GLES30.GL_LINEAR
-                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texSrc)
-                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, filt)
-                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, filt)
+                  // Pilih mode yang benar-benar bisa dijalankan.
+                  var mode = upscale
+                  if (mode == 0 && (progEpx == 0 || progSmooth == 0 || !fboOk)) mode = 2
+                  if (mode == 2 && (progEpx == 0 || !fboOk)) mode = 3
 
                   var inTex = texSrc
-                  if (mode == 1 && progEpx != 0 && fboOk) {
-                      runEpx(texSrc, fbo[0], srcW * 2, srcH * 2)
-                      runEpx(texUp[0], fbo[1], srcW * 4, srcH * 4)
-                      inTex = texUp[1]
+                  if (mode == 0 || mode == 2) {
+                      runEpx(texSrc, fbo2, srcW * 2, srcH * 2)
+                      runEpx(tex2, fbo4, srcW * 4, srcH * 4)
+                      inTex = tex4
+                      if (mode == 0) {
+                          runSmooth(tex4, fboS, srcW * 4, srcH * 4)
+                          inTex = texS
+                      }
                   }
+
+                  // Mipmap (untuk bloom/AO/bayangan) dibuat dari gambar terakhir sebelum layar.
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                  setFilter(inTex, mode == 4, full)
+
+                  if (full && look.ray > 0f && progRays != 0 && fboOk) runRays(inTex, look)
 
                   // Posisi game di layar: potret = rata atas, lanskap = tengah.
                   val aspect = srcW.toFloat() / srcH.toFloat()
@@ -1079,31 +1444,100 @@ jobs:
                   GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
                   GLES30.glViewport(vx, vy, vw, vh)
                   GLES30.glUseProgram(prog)
-                  GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inTex)
+                  GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texR)
+                  bindTex0(inTex)
 
-                  val p = presets[light.coerceIn(0, presets.size - 1)]
+                  GLES30.glUniform1i(loc(prog, "uImg"), 0)
                   GLES30.glUniform1i(loc(prog, "uSrc"), 0)
+                  GLES30.glUniform1i(loc(prog, "uRays"), 1)
                   GLES30.glUniform1f(loc(prog, "uFlip"), 1f)
                   GLES30.glUniform2f(loc(prog, "uBaseSize"), srcW.toFloat(), srcH.toFloat())
-                  GLES30.glUniform1f(loc(prog, "uSharp"), if (mode == 0) 1f else 0f)
-                  GLES30.glUniform1f(loc(prog, "uColor"), p.color)
-                  GLES30.glUniform1f(loc(prog, "uGrid"), p.grid)
-                  GLES30.glUniform1f(loc(prog, "uGlow"), p.glow)
-                  GLES30.glUniform1f(loc(prog, "uVignette"), p.vig)
-                  GLES30.glUniform1f(loc(prog, "uBright"), p.bright)
-                  GLES30.glUniform3f(loc(prog, "uTint"), p.tr, p.tg, p.tb)
+                  GLES30.glUniform1f(loc(prog, "uSharp"), if (mode == 1) 1f else 0f)
+                  GLES30.glUniform1f(loc(prog, "uTime"), ((SystemClock.elapsedRealtime() - startMs) % 600000L) / 1000f)
+
+                  GLES30.glUniform1f(loc(prog, "uColor"), look.color)
+                  GLES30.glUniform1f(loc(prog, "uGrid"), look.grid)
+                  GLES30.glUniform1f(loc(prog, "uVignette"), look.vig)
+                  GLES30.glUniform1f(loc(prog, "uBright"), look.bright)
+                  GLES30.glUniform3f(loc(prog, "uTint"), look.tint[0], look.tint[1], look.tint[2])
+
+                  val sd = look.sunDir
+                  val len = Math.sqrt((sd[0] * sd[0] + sd[1] * sd[1] + sd[2] * sd[2]).toDouble()).toFloat()
+                  GLES30.glUniform3f(loc(prog, "uAmbient"), look.ambient[0], look.ambient[1], look.ambient[2])
+                  GLES30.glUniform3f(loc(prog, "uSunCol"), look.sunCol[0], look.sunCol[1], look.sunCol[2])
+                  GLES30.glUniform3f(loc(prog, "uSunDir"), sd[0] / len, sd[1] / len, sd[2] / len)
+                  GLES30.glUniform1f(loc(prog, "uRelief"), look.relief)
+                  GLES30.glUniform1f(loc(prog, "uSpec"), look.spec)
+                  GLES30.glUniform1f(loc(prog, "uShadow"), look.shadow)
+                  GLES30.glUniform1f(loc(prog, "uShadowLen"), look.shadowLen)
+                  GLES30.glUniform1f(loc(prog, "uAO"), look.ao)
+                  GLES30.glUniform1f(loc(prog, "uBloom"), look.bloom)
+                  GLES30.glUniform1f(loc(prog, "uBloomThr"), look.bloomThr)
+                  GLES30.glUniform1f(loc(prog, "uRay"), if (progRays != 0 && fboOk) look.ray else 0f)
+                  GLES30.glUniform1f(loc(prog, "uBeam"), look.beam)
+                  GLES30.glUniform2f(loc(prog, "uSunUV"), look.sunUV[0], look.sunUV[1])
+                  GLES30.glUniform1f(loc(prog, "uCloud"), look.cloud)
+                  GLES30.glUniform1f(loc(prog, "uEmissive"), look.emissive)
+                  GLES30.glUniform1f(loc(prog, "uTone"), look.tone)
+                  GLES30.glUniform1f(loc(prog, "uExposure"), look.exposure)
+                  GLES30.glUniform1f(loc(prog, "uSat"), look.sat)
+                  GLES30.glUniform1f(loc(prog, "uContrast"), look.contrast)
+
                   GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+              }
+
+              private fun bindTex0(tex: Int) {
+                  GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+              }
+
+              /** Atur filter tekstur; kalau mips = true, buat mipmap-nya (dibutuhkan final.frag dan rays.frag). */
+              private fun setFilter(tex: Int, nearest: Boolean, mips: Boolean) {
+                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+                  val mag = if (nearest) GLES30.GL_NEAREST else GLES30.GL_LINEAR
+                  if (mips) GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+                  val min = if (mips) GLES30.GL_LINEAR_MIPMAP_LINEAR else mag
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, min)
+                  GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, mag)
               }
 
               private fun runEpx(inTex: Int, outFbo: Int, w: Int, h: Int) {
                   GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outFbo)
                   GLES30.glViewport(0, 0, w, h)
                   GLES30.glUseProgram(progEpx)
-                  GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                  GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inTex)
+                  bindTex0(inTex)
                   GLES30.glUniform1i(loc(progEpx, "uTex"), 0)
                   GLES30.glUniform1f(loc(progEpx, "uFlip"), 0f)
+                  GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+              }
+
+              private fun runSmooth(inTex: Int, outFbo: Int, w: Int, h: Int) {
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outFbo)
+                  GLES30.glViewport(0, 0, w, h)
+                  GLES30.glUseProgram(progSmooth)
+                  bindTex0(inTex)
+                  GLES30.glUniform1i(loc(progSmooth, "uTex"), 0)
+                  GLES30.glUniform1f(loc(progSmooth, "uFlip"), 0f)
+                  GLES30.glUniform1f(loc(progSmooth, "uSigmaS"), sigmaS)
+                  GLES30.glUniform1f(loc(progSmooth, "uSigmaR"), sigmaR)
+                  GLES30.glUniform1f(loc(progSmooth, "uSharpen"), sharpen)
+                  GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+              }
+
+              private fun runRays(inTex: Int, look: Look) {
+                  val p = progRays
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboR)
+                  GLES30.glViewport(0, 0, srcW * 2, srcH * 2)
+                  GLES30.glUseProgram(p)
+                  bindTex0(inTex)
+                  GLES30.glUniform1i(loc(p, "uImg"), 0)
+                  GLES30.glUniform1f(loc(p, "uFlip"), 0f)
+                  GLES30.glUniform2f(loc(p, "uBaseSize"), srcW.toFloat(), srcH.toFloat())
+                  GLES30.glUniform2f(loc(p, "uSunUV"), look.sunUV[0], look.sunUV[1])
+                  GLES30.glUniform1f(loc(p, "uRayThr"), look.rayThr)
+                  GLES30.glUniform1f(loc(p, "uRayDecay"), 0.95f)
+                  GLES30.glUniform1f(loc(p, "uRayDensity"), 1.0f)
                   GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
               }
 
@@ -1112,33 +1546,42 @@ jobs:
                   srcW = w
                   srcH = h
                   if (texSrc == 0) {
-                      val t = IntArray(3)
-                      GLES30.glGenTextures(3, t, 0)
+                      val t = IntArray(5)
+                      GLES30.glGenTextures(5, t, 0)
                       texSrc = t[0]
-                      texUp[0] = t[1]
-                      texUp[1] = t[2]
-                      val f = IntArray(2)
-                      GLES30.glGenFramebuffers(2, f, 0)
-                      fbo[0] = f[0]
-                      fbo[1] = f[1]
+                      tex2 = t[1]
+                      tex4 = t[2]
+                      texS = t[3]
+                      texR = t[4]
+                      val f = IntArray(4)
+                      GLES30.glGenFramebuffers(4, f, 0)
+                      fbo2 = f[0]
+                      fbo4 = f[1]
+                      fboS = f[2]
+                      fboR = f[3]
                   }
                   allocTex(texSrc, w, h)
-                  allocTex(texUp[0], w * 2, h * 2)
-                  allocTex(texUp[1], w * 4, h * 4)
+                  allocTex(tex2, w * 2, h * 2)
+                  allocTex(tex4, w * 4, h * 4)
+                  allocTex(texS, w * 4, h * 4)
+                  allocTex(texR, w * 2, h * 2)
 
-                  fboOk = true
-                  for (i in 0..1) {
-                      GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[i])
-                      GLES30.glFramebufferTexture2D(
-                          GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-                          GLES30.GL_TEXTURE_2D, texUp[i], 0
-                      )
-                      if (GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-                          fboOk = false
-                      }
-                  }
+                  val ok2 = attach(fbo2, tex2)
+                  val ok4 = attach(fbo4, tex4)
+                  val okS = attach(fboS, texS)
+                  val okR = attach(fboR, texR)
+                  fboOk = ok2 && ok4 && okS && okR
                   GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                  if (!fboOk) onError("FBO tidak lengkap, Scale4x dimatikan")
+                  if (!fboOk) onError("FBO tidak lengkap, mode Realistis/Scale4x dimatikan")
+              }
+
+              private fun attach(fbo: Int, tex: Int): Boolean {
+                  GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+                  GLES30.glFramebufferTexture2D(
+                      GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                      GLES30.GL_TEXTURE_2D, tex, 0
+                  )
+                  return GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE
               }
 
               private fun allocTex(tex: Int, w: Int, h: Int) {
@@ -1577,7 +2020,7 @@ jobs:
 
               private var emu: EmuThread? = null
               private var upscaleIdx = 0
-              private var lightIdx = 1
+              private var lightIdx = 2
               private var touchMask = 0
               private var keyMask = 0
               private var axisMask = 0
@@ -1588,8 +2031,8 @@ jobs:
                   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
                   prefs = getSharedPreferences("gba", MODE_PRIVATE)
-                  upscaleIdx = prefs.getInt("upscale", 0).coerceIn(0, Opts.upscale.size - 1)
-                  lightIdx = prefs.getInt("light", 1).coerceIn(0, Opts.light.size - 1)
+                  upscaleIdx = prefs.getInt("upscale2", 0).coerceIn(0, Opts.upscale.size - 1)
+                  lightIdx = prefs.getInt("light2", 2).coerceIn(0, Opts.light.size - 1)
 
                   renderer = GameRenderer(this) { msg -> toast(msg) }
                   renderer.upscale = upscaleIdx
@@ -1800,14 +2243,14 @@ jobs:
               private fun setUpscale(idx: Int) {
                   upscaleIdx = idx
                   renderer.upscale = idx
-                  prefs.edit().putInt("upscale", idx).apply()
+                  prefs.edit().putInt("upscale2", idx).apply()
                   glView.requestRender()
               }
 
               private fun setLight(idx: Int) {
                   lightIdx = idx
                   renderer.light = idx
-                  prefs.edit().putInt("light", idx).apply()
+                  prefs.edit().putInt("light2", idx).apply()
                   glView.requestRender()
               }
 
